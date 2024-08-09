@@ -17,3 +17,10 @@ type Problem struct {
 	InputFormat  *string `json:"input_format,omitempty"`  // use *string to allow null values
 	OutputFormat *string `json:"output_format,omitempty"` // use *string to allow null values
 }
+
+type TestCase struct {
+	ID     int    `json:"id"`
+	Input  string `json:"input"`
+	Output string `json:"output"`
+	Status bool   `json:"status"`
+}
