@@ -35,20 +35,3 @@ func createConnection() *sql.DB {
 	// return the connection
 	return db
 }
-
-// package handler
-
-// import (
-//     "database/sql"
-//     _ "github.com/lib/pq" // Import the PostgreSQL driver
-//     "log"
-// )
-
-// func createConnection() *sql.DB {
-//     connStr := "postgres://postgres:mysecretpassword@localhost:5432/codedb?sslmode=disable"
-//     db, err := sql.Open("postgres", connStr)
-//     if err != nil {
-//         log.Fatalf("Error opening database: %v", err)
-//     }
-//     return db
-// }
