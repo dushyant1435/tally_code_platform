@@ -377,8 +377,8 @@ tracemalloc.stop()
 		runtime := ""
 		memoryUsed := ""
 		if len(lines) > 2 {
-			runtime = strings.TrimPrefix(lines[len(lines)-3], "Execution Time: ")
-			memoryUsed = strings.TrimPrefix(lines[len(lines)-2], "Peak Memory Usage: ")
+			runtime = strings.TrimPrefix(lines[0], "Execution Time: ")
+			memoryUsed = strings.TrimPrefix(lines[1], "Peak Memory Usage: ")
 		}
 
 		if err != nil {
@@ -396,7 +396,7 @@ tracemalloc.stop()
 		}
 
 		// Compare the output with the expected output
-		testPassed := strings.TrimSpace(strings.Join(lines[:len(lines)-3], "\n")) == strings.TrimSpace(expectedOutput)
+		testPassed := lines[2] == strings.TrimSpace(expectedOutput)
 		if !testPassed {
 			allTestsPassed = false
 		}
@@ -404,7 +404,7 @@ tracemalloc.stop()
 		results = append(results, map[string]interface{}{
 			"input":       input,
 			"expected":    expectedOutput,
-			"output":      strings.TrimSpace(strings.Join(lines[:len(lines)-3], "\n")),
+			"output":      lines[2],
 			"result":      testPassed,
 			"runtime":     runtime,
 			"memory_used": memoryUsed,
