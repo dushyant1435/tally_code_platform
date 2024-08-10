@@ -8,6 +8,7 @@ type Problem struct {
 	Constraints  *string `json:"constraints,omitempty"`   // use *string to allow null values
 	InputFormat  *string `json:"input_format,omitempty"`  // use *string to allow null values
 	OutputFormat *string `json:"output_format,omitempty"` // use *string to allow null values
+	Status       bool  `json:"status`
 }
 
 type TestCase struct {

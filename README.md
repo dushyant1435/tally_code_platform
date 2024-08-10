@@ -17,6 +17,12 @@ create table testcases(
 );
 
 
+CREATE TABLE submission (
+    id int not null,
+    user_id INT NOT NULL
+);
+
+
 -- Test cases for problem id 1 (Sum of Two Numbers)
 INSERT INTO testcases (id, input, output, sample) VALUES
 (1, '3 5', '8', true),

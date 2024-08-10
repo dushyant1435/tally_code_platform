@@ -105,6 +105,13 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	if allTestsPassed {
+		insertStatement := `INSERT INTO submission (id, user_id) VALUES ($1, $2)`
+		_, err = db.Exec(insertStatement, requestData.ID, requestData.UserID)
+		if err != nil {
+			log.Printf("Error inserting into submission table: %v", err)
+		}
+	}
 
 	// Return the overall success status, total runtime, and max memory usage
 	response := map[string]interface{}{

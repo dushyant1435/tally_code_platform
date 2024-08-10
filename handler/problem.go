@@ -72,6 +72,47 @@ func GetProblem(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(Problem)
 }
 
+// func GetAllProblems(w http.ResponseWriter, r *http.Request) {
+// 	// Create a connection to the database
+// 	db := createConnection()
+// 	defer db.Close()
+
+// 	// SQL query to get all problems
+// 	sqlStatement := `SELECT id, user_id, name, description, constraints, input_format, output_format FROM problems`
+
+// 	// Execute the query
+// 	rows, err := db.Query(sqlStatement)
+// 	if err != nil {
+// 		log.Fatalf("Unable to execute the query. %v", err)
+// 		w.WriteHeader(http.StatusInternalServerError)
+// 		return
+// 	}
+// 	defer rows.Close()
+
+// 	// Slice to store the problems
+// 	var problems []models.Problem
+
+// 	// Iterate over the rows
+// 	for rows.Next() {
+// 		var problem models.Problem
+
+// 		// Scan the row into the problem struct
+// 		err = rows.Scan(&problem.ID, &problem.UserId, &problem.Name, &problem.Description, &problem.Constraints, &problem.InputFormat, &problem.OutputFormat)
+// 		if err != nil {
+// 			log.Fatalf("Unable to scan the row. %v", err)
+// 			w.WriteHeader(http.StatusInternalServerError)
+// 			return
+// 		}
+
+// 		// Append the problem to the slice
+// 		problems = append(problems, problem)
+// 	}
+
+// 	// Return the list of problems as JSON
+// 	w.WriteHeader(http.StatusOK)
+// 	json.NewEncoder(w).Encode(problems)
+// }
+
 func GetAllProblems(w http.ResponseWriter, r *http.Request) {
 	// Create a connection to the database
 	db := createConnection()
@@ -90,7 +131,7 @@ func GetAllProblems(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	// Slice to store the problems
-	var problems []models.Problem
+	var problems []map[string]interface{}
 
 	// Iterate over the rows
 	for rows.Next() {
@@ -104,8 +145,27 @@ func GetAllProblems(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Append the problem to the slice
-		problems = append(problems, problem)
+		// Check if the problem ID and user ID are present in the submission table
+		var status bool
+		checkStatement := `SELECT EXISTS (SELECT 1 FROM submission WHERE id=$1 AND user_id=$2)`
+		err = db.QueryRow(checkStatement, problem.ID, problem.UserId).Scan(&status)
+		if err != nil {
+			log.Fatalf("Unable to execute the check query. %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		// Append the problem and status to the slice
+		problems = append(problems, map[string]interface{}{
+			"id":            problem.ID,
+			"user_id":       problem.UserId,
+			"name":          problem.Name,
+			"description":   problem.Description,
+			"constraints":   problem.Constraints,
+			"input_format":  problem.InputFormat,
+			"output_format": problem.OutputFormat,
+			"status":        status,
+		})
 	}
 
 	// Return the list of problems as JSON
