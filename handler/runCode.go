@@ -26,7 +26,7 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 	defer db.Close()
 
 	// Fetch test cases using the problem ID
-	sqlStatement := `SELECT input, output FROM testcases WHERE id=$1 AND sample=true`
+	sqlStatement := `SELECT input, output FROM testcases WHERE id=$1`
 	rows, err := db.Query(sqlStatement, requestData.ID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Unable to fetch test cases: %v", err), http.StatusInternalServerError)
@@ -50,7 +50,9 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 	var totalRuntime float64
 	var maxMemoryUsed int64
 
+	rowCount := 0;
 	for rows.Next() {
+		rowCount++
 		var input, expectedOutput string
 		if err := rows.Scan(&input, &expectedOutput); err != nil {
 			http.Error(w, fmt.Sprintf("Unable to scan row: %v", err), http.StatusInternalServerError)
@@ -104,6 +106,9 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 			allTestsPassed = false
 			break
 		}
+	}
+	if(rowCount==0){
+		allTestsPassed=false
 	}
 	if allTestsPassed {
 		insertStatement := `INSERT INTO submission (id, user_id) VALUES ($1, $2)`
@@ -217,7 +222,9 @@ tracemalloc.stop()
 	allTestsPassed := true
 	var results []map[string]interface{}
 
+	rowCount := 0;
 	for rows.Next() {
+		rowCount++
 		var input, expectedOutput string
 		if err := rows.Scan(&input, &expectedOutput); err != nil {
 			http.Error(w, fmt.Sprintf("Unable to scan row: %v", err), http.StatusInternalServerError)
@@ -269,6 +276,9 @@ tracemalloc.stop()
 		})
 	}
 
+	if(rowCount==0){
+		allTestsPassed=false
+	}
 	// Return results with the overall success status
 	response := map[string]interface{}{
 		"success": allTestsPassed,

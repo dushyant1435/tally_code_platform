@@ -14,7 +14,7 @@ func Router() *mux.Router {
 	router.HandleFunc("/api/v1/problems", handler.GetAllProblems).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/v1/newproblem", handler.CreateProblem).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/v1/testcases/{id}", handler.GetTestCasesByID).Methods("GET", "OPTIONS")
-	router.HandleFunc("/api/v1/sampleTestCases/{id}", handler.GetSampleTestCasesByID).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/v1/problem/{id}/sampleTestCases", handler.GetSampleTestCasesByID).Methods("GET", "OPTIONS")
 	router.HandleFunc("/api/v1/createTestCase", handler.CreateTestCase).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/v1/runCode", handler.RunCode).Methods("POST", "OPTIONS")
 	router.HandleFunc("/api/v1/runSampleCode", handler.RunSampleCode).Methods("POST", "OPTIONS")
