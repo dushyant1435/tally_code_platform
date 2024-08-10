@@ -22,5 +22,5 @@ type TestCase struct {
 	ID     int    `json:"id"`
 	Input  string `json:"input"`
 	Output string `json:"output"`
-	Status bool   `json:"status"`
+	Sample bool   `json:"sample"`
 }

@@ -13,5 +13,5 @@ create table testcases(
 	id int not null,
 	input text not null,
 	output text not null,
-	status bool
+	sample bool
 );
