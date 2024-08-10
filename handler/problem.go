@@ -118,18 +118,20 @@ func GetAllProblems(w http.ResponseWriter, r *http.Request) {
 	db := createConnection()
 	defer db.Close()
 
-	userIDStr := r.Header.Get("user_id")
-	if userIDStr == "" {
-		http.Error(w, "user_id header is missing", http.StatusBadRequest)
+	var requestBody models.RequestBody
+
+	err := json.NewDecoder(r.Body).Decode(&requestBody)
+	if err != nil || requestBody.UserID == 0 {
+		http.Error(w, "Invalid request body or missing user_id", http.StatusBadRequest)
 		return
 	}
 
 	// Convert user_id to int
-	userID, err := strconv.Atoi(userIDStr)
-	if err != nil {
-		http.Error(w, "Invalid user_id format", http.StatusBadRequest)
-		return
-	}
+	// userID, err := strconv.Atoi(userIDStr)
+	// if err != nil {
+	// 	http.Error(w, "Invalid user_id format", http.StatusBadRequest)
+	// 	return
+	// }
 
 	// SQL query to get all problems
 	sqlStatement := `SELECT id, user_id, name, description, constraints, input_format, output_format FROM problems`
@@ -161,7 +163,7 @@ func GetAllProblems(w http.ResponseWriter, r *http.Request) {
 		// Check if the problem ID and user ID are present in the submission table
 		var status bool
 		checkStatement := `SELECT EXISTS (SELECT 1 FROM submission WHERE id=$1 AND user_id=$2)`
-		err = db.QueryRow(checkStatement, problem.ID, userID).Scan(&status)
+		err = db.QueryRow(checkStatement, problem.ID, requestBody.UserID).Scan(&status)
 		if err != nil {
 			log.Fatalf("Unable to execute the check query. %v", err)
 			w.WriteHeader(http.StatusInternalServerError)

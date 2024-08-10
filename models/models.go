@@ -29,3 +29,7 @@ type CustomCodeData struct {
     Code  string `json:"code"`
     Input string `json:"input"`
 }
+
+type RequestBody struct {
+	UserID int64 `json:"user_id"`
+}
