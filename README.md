@@ -1,4 +1,7 @@
 # tally_code_platform
+ for running server 
+ go run main.go
+
 create table Problems (
 	id int primary key not null, 
 	user_id int not null,
