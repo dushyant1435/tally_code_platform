@@ -1,289 +1,275 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
+	"time"
 	"y/models"
 )
 
+const (
+	executionTimeout = 5 * time.Second
+	pythonBinary     = "python3"
+)
+
+type execResult struct {
+	Stdout  string
+	Stderr  string
+	Runtime float64
+	TimedOut bool
+}
+
+// runPython writes code to a fresh temp file and executes it once with the
+// supplied stdin, returning the captured stdout/stderr and elapsed time.
+func runPython(ctx context.Context, code, stdin string) (execResult, error) {
+	f, err := os.CreateTemp("", "tally-*.py")
+	if err != nil {
+		return execResult{}, fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(f.Name())
+
+	if _, err := f.WriteString(code); err != nil {
+		f.Close()
+		return execResult{}, fmt.Errorf("write temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return execResult{}, fmt.Errorf("close temp file: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, pythonBinary, f.Name())
+	cmd.Stdin = strings.NewReader(stdin)
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	start := time.Now()
+	err = cmd.Run()
+	elapsed := time.Since(start).Seconds()
+
+	res := execResult{
+		Stdout:  stdout.String(),
+		Stderr:  stderr.String(),
+		Runtime: elapsed,
+	}
+
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		res.TimedOut = true
+		return res, nil
+	}
+	if err != nil {
+		// Non-zero exit is not fatal for us; we still want stdout/stderr.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return res, nil
+		}
+		return res, err
+	}
+	return res, nil
+}
+
+// RunCode executes the submitted code against every test case for a problem.
+// On full pass it records a row in `submission` (idempotent).
 func RunCode(w http.ResponseWriter, r *http.Request) {
-	// Parse the JSON request body
-	var requestData models.CodeData
-
-	err := json.NewDecoder(r.Body).Decode(&requestData)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Unable to decode the request body: %v", err), http.StatusBadRequest)
+	var req models.CodeData
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	db := createConnection()
-	defer db.Close()
-
-	// Fetch test cases using the problem ID
-	sqlStatement := `SELECT input, output FROM testcases WHERE id=$1`
-	rows, err := db.Query(sqlStatement, requestData.ID)
+	db := DB()
+	rows, err := db.Query(`SELECT input, output FROM testcases WHERE id=$1`, req.ID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Unable to fetch test cases: %v", err), http.StatusInternalServerError)
+		log.Printf("RunCode query: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to fetch test cases")
 		return
 	}
 	defer rows.Close()
 
-	// Generate a unique filename based on user ID and problem ID
-	filename := fmt.Sprintf("temp_%d_%d.py", requestData.UserID, requestData.ID)
+	allPassed := true
+	totalRuntime := 0.0
+	rowCount := 0
+	var failedAt int
+	var failMessage string
 
-	// Write the code to the temporary file
-	err = os.WriteFile(filename, []byte(requestData.Code), 0644)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Unable to write temporary Python file: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer os.Remove(filename) // Ensure the file is removed after execution
-
-	// Execute the code for each test case and compare results
-	allTestsPassed := true
-	var totalRuntime float64
-	var maxMemoryUsed int64
-
-	rowCount := 0;
 	for rows.Next() {
 		rowCount++
-		var input, expectedOutput string
-		if err := rows.Scan(&input, &expectedOutput); err != nil {
-			http.Error(w, fmt.Sprintf("Unable to scan row: %v", err), http.StatusInternalServerError)
+		var input, expected string
+		if err := rows.Scan(&input, &expected); err != nil {
+			log.Printf("RunCode scan: %v", err)
+			httpError(w, http.StatusInternalServerError, "failed to scan test case")
 			return
 		}
 
-		// Use 'time' command to measure execution time and memory usage
-		cmd := exec.Command("bash", "-c", fmt.Sprintf("/usr/bin/time -f '%%e %%M' python3 %s", filename))
-		cmd.Stdin = strings.NewReader(input)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			log.Printf("Error executing code: %v", err)
-			allTestsPassed = false
+		ctx, cancel := context.WithTimeout(r.Context(), executionTimeout)
+		res, runErr := runPython(ctx, req.Code, input)
+		cancel()
+
+		if runErr != nil {
+			log.Printf("RunCode exec: %v", runErr)
+			allPassed = false
+			failedAt = rowCount
+			failMessage = "execution error"
+			break
+		}
+		if res.TimedOut {
+			allPassed = false
+			failedAt = rowCount
+			failMessage = "time limit exceeded"
 			break
 		}
 
-		// The output from the 'time' command contains time and memory usage
-		outputParts := strings.Split(strings.TrimSpace(string(output)), "\n")
-		if len(outputParts) < 2 {
-			http.Error(w, "Failed to get execution metrics", http.StatusInternalServerError)
-			return
-		}
-		metrics := strings.Fields(outputParts[len(outputParts)-1])
-		if len(metrics) < 2 {
-			http.Error(w, "Failed to parse execution metrics", http.StatusInternalServerError)
-			return
+		if res.Runtime > totalRuntime {
+			totalRuntime = res.Runtime
 		}
 
-		// Convert the metrics to appropriate types
-		runtime, err := strconv.ParseFloat(metrics[0], 64)
-		if err != nil {
-			http.Error(w, "Failed to parse runtime", http.StatusInternalServerError)
-			return
-		}
-		memoryUsed, err := strconv.ParseInt(metrics[1], 10, 64)
-		if err != nil {
-			http.Error(w, "Failed to parse memory usage", http.StatusInternalServerError)
-			return
-		}
-
-		// Accumulate total runtime and track the maximum memory used
-		if totalRuntime <= runtime {
-			totalRuntime = runtime
-		}
-		if memoryUsed > maxMemoryUsed {
-			maxMemoryUsed = memoryUsed
-		}
-
-		// Compare the output with the expected output
-		if strings.TrimSpace(outputParts[0]) != strings.TrimSpace(expectedOutput) {
-			allTestsPassed = false
+		if strings.TrimSpace(res.Stdout) != strings.TrimSpace(expected) {
+			allPassed = false
+			failedAt = rowCount
+			failMessage = "wrong answer"
 			break
 		}
 	}
-	if(rowCount==0){
-		allTestsPassed=false
+	if err := rows.Err(); err != nil {
+		log.Printf("RunCode iter: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to read test cases")
+		return
 	}
-	if allTestsPassed {
-		insertStatement := `INSERT INTO submission (id, user_id) VALUES ($1, $2)`
-		_, err = db.Exec(insertStatement, requestData.ID, requestData.UserID)
+
+	if rowCount == 0 {
+		allPassed = false
+		failMessage = "no test cases configured for this problem"
+	}
+
+	if allPassed {
+		_, err := db.Exec(
+			`INSERT INTO submission (id, user_id) VALUES ($1, $2)
+			 ON CONFLICT (id, user_id) DO NOTHING`,
+			req.ID, req.UserID,
+		)
 		if err != nil {
-			log.Printf("Error inserting into submission table: %v", err)
+			log.Printf("RunCode submission insert: %v", err)
 		}
 	}
 
-	// Return the overall success status, total runtime, and max memory usage
-	response := map[string]interface{}{
-		"success":      allTestsPassed,
+	resp := map[string]interface{}{
+		"success":      allPassed,
 		"totalRuntime": totalRuntime,
-		"memoryUsed":   maxMemoryUsed, // in kilobytes
+		"memoryUsed":   0,
+		"failedAt":     failedAt,
+		"message":      failMessage,
 	}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	writeJSON(w, http.StatusOK, resp)
 }
 
+// CustomRunCode runs the code once with the user-provided stdin and returns
+// the captured output (Playground endpoint).
 func CustomRunCode(w http.ResponseWriter, r *http.Request) {
-	// Parse the JSON request body into CustomCodeData struct
-	var requestData models.CustomCodeData
-
-	err := json.NewDecoder(r.Body).Decode(&requestData)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Unable to decode the request body: %v", err), http.StatusBadRequest)
+	var req models.CustomCodeData
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	// Generate a unique filename
-	filename := "temp_code.py"
+	ctx, cancel := context.WithTimeout(r.Context(), executionTimeout)
+	defer cancel()
 
-	// Write the code to the temporary file
-	err = os.WriteFile(filename, []byte(requestData.Code), 0644)
+	res, err := runPython(ctx, req.Code, req.Input)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Unable to write temporary Python file: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer os.Remove(filename) // Ensure the file is removed after execution
-
-	// Execute the code with the provided input
-	cmd := exec.Command("python3", filename)
-	cmd.Stdin = strings.NewReader(requestData.Input)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("Error executing code: %v", err)
-		http.Error(w, fmt.Sprintf("Error executing code: %v", err), http.StatusInternalServerError)
+		log.Printf("CustomRunCode exec: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to execute code")
 		return
 	}
 
-	// Return the output
-	response := map[string]string{"output": strings.TrimSpace(string(output))}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	output := strings.TrimRight(res.Stdout, "\n")
+	if res.TimedOut {
+		output = strings.TrimSpace(output + "\n[time limit exceeded after " + fmt.Sprintf("%.1fs", executionTimeout.Seconds()) + "]")
+	} else if res.Stderr != "" {
+		output = strings.TrimSpace(output + "\n" + res.Stderr)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"output": output})
 }
 
+// RunSampleCode runs the code against only the sample test cases and returns
+// per-case results so the UI can show actual-vs-expected.
 func RunSampleCode(w http.ResponseWriter, r *http.Request) {
-	// Parse the JSON request body
-	var requestData models.CodeData
-
-	err := json.NewDecoder(r.Body).Decode(&requestData)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Unable to decode the request body: %v", err), http.StatusBadRequest)
+	var req models.CodeData
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	db := createConnection()
-	defer db.Close()
-
-	// Fetch sample test cases using the problem ID
-	sqlStatement := `SELECT input, output FROM testcases WHERE id=$1 AND sample=true`
-	rows, err := db.Query(sqlStatement, requestData.ID)
+	rows, err := DB().Query(
+		`SELECT input, output FROM testcases WHERE id=$1 AND sample=true`, req.ID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Unable to fetch test cases: %v", err), http.StatusInternalServerError)
+		log.Printf("RunSampleCode query: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to fetch sample test cases")
 		return
 	}
 	defer rows.Close()
 
-	// Generate a unique filename based on problem ID
-	filename := fmt.Sprintf("temp_%d.py", requestData.ID)
+	results := make([]map[string]interface{}, 0)
+	allPassed := true
+	rowCount := 0
 
-	// Prepare the Python code with metrics collection
-	codeWithMetrics := `
-import sys
-import time
-import tracemalloc
-
-tracemalloc.start()
-start_time = time.time()
-
-` + requestData.Code + `
-
-end_time = time.time()
-current, peak = tracemalloc.get_traced_memory()
-execution_time = end_time - start_time
-
-sys.stderr.write(f"Execution Time: {execution_time} seconds\n")
-sys.stderr.write(f"Peak Memory Usage: {peak / 1024} KB\n")
-tracemalloc.stop()
-`
-
-	// Write the modified code to the temporary file
-	err = os.WriteFile(filename, []byte(codeWithMetrics), 0644)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Unable to write temporary Python file: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer os.Remove(filename) // Ensure the file is removed after execution
-
-	// Execute the code for each test case and compare results
-	allTestsPassed := true
-	var results []map[string]interface{}
-
-	rowCount := 0;
 	for rows.Next() {
 		rowCount++
-		var input, expectedOutput string
-		if err := rows.Scan(&input, &expectedOutput); err != nil {
-			http.Error(w, fmt.Sprintf("Unable to scan row: %v", err), http.StatusInternalServerError)
+		var input, expected string
+		if err := rows.Scan(&input, &expected); err != nil {
+			log.Printf("RunSampleCode scan: %v", err)
+			httpError(w, http.StatusInternalServerError, "failed to scan test case")
 			return
 		}
 
-		// Execute the Python file with the input as argument
-		cmd := exec.Command("python3", filename)
-		cmd.Stdin = strings.NewReader(input)
-		output, err := cmd.CombinedOutput()
-		outputStr := string(output)
+		ctx, cancel := context.WithTimeout(r.Context(), executionTimeout)
+		res, runErr := runPython(ctx, req.Code, input)
+		cancel()
 
-		// Parse the execution time and memory usage from stderr
-		lines := strings.Split(outputStr, "\n")
-		runtime := ""
-		memoryUsed := ""
-		if len(lines) > 2 {
-			runtime = strings.TrimPrefix(lines[0], "Execution Time: ")
-			memoryUsed = strings.TrimPrefix(lines[1], "Peak Memory Usage: ")
+		actual := strings.TrimRight(res.Stdout, "\n")
+		passed := false
+		switch {
+		case runErr != nil:
+			actual = "execution error: " + runErr.Error()
+		case res.TimedOut:
+			actual = "time limit exceeded"
+		case res.Stderr != "":
+			actual = strings.TrimSpace(res.Stderr)
+		default:
+			passed = strings.TrimSpace(actual) == strings.TrimSpace(expected)
 		}
-
-		if err != nil {
-			log.Printf("Error executing code: %v", err)
-			allTestsPassed = false
-			results = append(results, map[string]interface{}{
-				"input":       input,
-				"expected":    expectedOutput,
-				"output":      "error",
-				"result":      false,
-				"runtime":     runtime,
-				"memory_used": memoryUsed,
-			})
-			continue
-		}
-
-		// Compare the output with the expected output
-		testPassed := lines[2] == strings.TrimSpace(expectedOutput)
-		if !testPassed {
-			allTestsPassed = false
+		if !passed {
+			allPassed = false
 		}
 
 		results = append(results, map[string]interface{}{
 			"input":       input,
-			"expected":    expectedOutput,
-			"output":      lines[2],
-			"result":      testPassed,
-			"runtime":     runtime,
-			"memory_used": memoryUsed,
+			"expected":    expected,
+			"output":      actual,
+			"result":      passed,
+			"runtime":     fmt.Sprintf("%.3fs", res.Runtime),
+			"memory_used": "-",
 		})
 	}
+	if err := rows.Err(); err != nil {
+		log.Printf("RunSampleCode iter: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to read test cases")
+		return
+	}
 
-	if(rowCount==0){
-		allTestsPassed=false
+	if rowCount == 0 {
+		allPassed = false
 	}
-	// Return results with the overall success status
-	response := map[string]interface{}{
-		"success": allTestsPassed,
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": allPassed,
 		"results": results,
-	}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	})
 }

@@ -1,2 +1,22 @@
 *:Zone.Identifier
-*:Zone.Identifier
+
+# Env files (do NOT commit secrets)
+.env
+.env.local
+server/.env
+
+# Node
+client/node_modules/
+client/build/
+
+# Go
+server/server
+server/server.exe
+server/tally
+server/tally.exe
+
+# Misc
+*.log
+.DS_Store
+.vscode/
+.idea/

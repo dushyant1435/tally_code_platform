@@ -11,156 +11,71 @@ import (
 )
 
 func CreateTestCase(w http.ResponseWriter, r *http.Request) {
-	// Parse the JSON request body
-	var testcase models.TestCase
-	err := json.NewDecoder(r.Body).Decode(&testcase)
-
-	if err != nil {
-		log.Fatalf("Unable to decode the request body. %v", err)
-		w.WriteHeader(http.StatusBadRequest)
+	var tc models.TestCase
+	if err := json.NewDecoder(r.Body).Decode(&tc); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if tc.ID == 0 || tc.Input == "" || tc.Output == "" {
+		httpError(w, http.StatusBadRequest, "id, input and output are required")
 		return
 	}
 
-	// Create a connection to the database
-	db := createConnection()
-
-	// Close the db connection
-	defer db.Close()
-
-	// Insert query
-	sqlStatement := `
-    INSERT INTO testcases (id, input, output, sample)
-    VALUES ($1, $2, $3, $4)`
-
-	// Execute the SQL statement
-	_, err = db.Exec(sqlStatement, testcase.ID, testcase.Input, testcase.Output, testcase.Sample)
-
+	_, err := DB().Exec(
+		`INSERT INTO testcases (id, input, output, sample) VALUES ($1, $2, $3, $4)`,
+		tc.ID, tc.Input, tc.Output, tc.Sample,
+	)
 	if err != nil {
-		log.Fatalf("Unable to execute the query. %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("CreateTestCase insert: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to create test case")
+		return
+	}
+	writeJSON(w, http.StatusCreated, tc)
+}
+
+func fetchTestCases(w http.ResponseWriter, r *http.Request, sampleOnly bool) {
+	params := mux.Vars(r)
+	id, err := strconv.Atoi(params["id"])
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "invalid problem id")
 		return
 	}
 
-	// Respond with status created
-	w.WriteHeader(http.StatusCreated)
+	query := `SELECT id, input, output, sample FROM testcases WHERE id=$1`
+	if sampleOnly {
+		query += ` AND sample=true`
+	}
+
+	rows, err := DB().Query(query, id)
+	if err != nil {
+		log.Printf("fetchTestCases query: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to fetch test cases")
+		return
+	}
+	defer rows.Close()
+
+	cases := make([]models.TestCase, 0)
+	for rows.Next() {
+		var c models.TestCase
+		if err := rows.Scan(&c.ID, &c.Input, &c.Output, &c.Sample); err != nil {
+			log.Printf("fetchTestCases scan: %v", err)
+			httpError(w, http.StatusInternalServerError, "failed to scan test case")
+			return
+		}
+		cases = append(cases, c)
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("fetchTestCases iter: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to read test cases")
+		return
+	}
+	writeJSON(w, http.StatusOK, cases)
 }
 
 func GetTestCasesByID(w http.ResponseWriter, r *http.Request) {
-	// Get the id from the request parameters
-	params := mux.Vars(r)
-	id, err := strconv.Atoi(params["id"])
-
-	if err != nil {
-		log.Fatalf("Unable to convert the string into int. %v", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	// Create the database connection
-	db := createConnection()
-
-	// Close the database connection
-	defer db.Close()
-
-	// Define the query to get test cases by id
-	sqlStatement := `SELECT id, input, output, sample FROM testcases WHERE id=$1`
-
-	// Execute the query
-	rows, err := db.Query(sqlStatement, id)
-
-	if err != nil {
-		log.Fatalf("Unable to execute the query. %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	defer rows.Close()
-
-	// Create a slice to store the test cases
-	var testCases []models.TestCase
-
-	// Iterate over the rows and add to the slice
-	for rows.Next() {
-		var testCase models.TestCase
-
-		err = rows.Scan(&testCase.ID, &testCase.Input, &testCase.Output, &testCase.Sample)
-		if err != nil {
-			log.Fatalf("Unable to scan the row. %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		testCases = append(testCases, testCase)
-	}
-
-	// Check for any errors during iteration
-	if err = rows.Err(); err != nil {
-		log.Fatalf("Error during iteration over rows. %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	// Send the response
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(testCases)
+	fetchTestCases(w, r, false)
 }
 
 func GetSampleTestCasesByID(w http.ResponseWriter, r *http.Request) {
-	// Get the id from the request parameters
-	params := mux.Vars(r)
-	id, err := strconv.Atoi(params["id"])
-
-	if err != nil {
-		log.Fatalf("Unable to convert the string into int. %v", err)
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	// Create the database connection
-	db := createConnection()
-
-	// Close the database connection
-	defer db.Close()
-
-	// Define the query to get test cases by id
-	sqlStatement := `SELECT id, input, output, sample FROM testcases WHERE id=$1 AND sample=true`
-
-	// Execute the query
-	rows, err := db.Query(sqlStatement, id)
-
-	if err != nil {
-		log.Fatalf("Unable to execute the query. %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	defer rows.Close()
-
-	// Create a slice to store the test cases
-	var testCases []models.TestCase
-
-	// Iterate over the rows and add to the slice
-	for rows.Next() {
-		var testCase models.TestCase
-
-		err = rows.Scan(&testCase.ID, &testCase.Input, &testCase.Output, &testCase.Sample)
-		if err != nil {
-			log.Fatalf("Unable to scan the row. %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		testCases = append(testCases, testCase)
-	}
-
-	// Check for any errors during iteration
-	if err = rows.Err(); err != nil {
-		log.Fatalf("Error during iteration over rows. %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	// Send the response
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(testCases)
+	fetchTestCases(w, r, true)
 }

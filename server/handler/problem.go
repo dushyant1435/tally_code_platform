@@ -3,7 +3,7 @@ package handler
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -12,22 +12,24 @@ import (
 	"github.com/gorilla/mux"
 )
 
+func writeJSON(w http.ResponseWriter, status int, body interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		log.Printf("write json: %v", err)
+	}
+}
+
+func httpError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
 func GetProblemByID(id int64) (models.Problem, error) {
-	// create the postgres db connection
-	db := createConnection()
-
-	// close the db connection
-	defer db.Close()
-	// Create a problem of models.Problem type
 	var problem models.Problem
+	row := DB().QueryRow(
+		`SELECT id, user_id, name, description, constraints, input_format, output_format
+		 FROM problems WHERE id=$1`, id)
 
-	// Create the select SQL query
-	sqlStatement := `SELECT * FROM Problems WHERE id=$1`
-
-	// Execute the SQL statement
-	row := db.QueryRow(sqlStatement, id)
-
-	// Unmarshal the row object to problem
 	err := row.Scan(
 		&problem.ID,
 		&problem.UserId,
@@ -37,191 +39,115 @@ func GetProblemByID(id int64) (models.Problem, error) {
 		&problem.InputFormat,
 		&problem.OutputFormat,
 	)
-
-	switch err {
-	case sql.ErrNoRows:
-		// No rows returned; return the empty problem with no error
-		return problem, nil
-	case nil:
-		// Successfully retrieved the problem
-		return problem, nil
-	default:
-		// Error occurred while scanning the row
-		log.Fatalf("Unable to scan the row. %v", err)
-		return problem, err
-	}
+	return problem, err
 }
 
-// GetProblem handles the request to get a problem by its ID
+// GetProblem returns a single problem by ID.
 func GetProblem(w http.ResponseWriter, r *http.Request) {
-	// Get the problem ID from the request parameters
 	params := mux.Vars(r)
-
-	// Convert the ID from string to int
 	id, err := strconv.Atoi(params["id"])
 	if err != nil {
-		log.Fatalf("Unable to convert the string into int.  %v", err)
-	}
-
-	Problem, err := GetProblemByID(int64(id))
-
-	if err != nil {
-		log.Fatalf("Unable to get problem. %v", err)
-	}
-
-	json.NewEncoder(w).Encode(Problem)
-}
-
-// func GetAllProblems(w http.ResponseWriter, r *http.Request) {
-// 	// Create a connection to the database
-// 	db := createConnection()
-// 	defer db.Close()
-
-// 	// SQL query to get all problems
-// 	sqlStatement := `SELECT id, user_id, name, description, constraints, input_format, output_format FROM problems`
-
-// 	// Execute the query
-// 	rows, err := db.Query(sqlStatement)
-// 	if err != nil {
-// 		log.Fatalf("Unable to execute the query. %v", err)
-// 		w.WriteHeader(http.StatusInternalServerError)
-// 		return
-// 	}
-// 	defer rows.Close()
-
-// 	// Slice to store the problems
-// 	var problems []models.Problem
-
-// 	// Iterate over the rows
-// 	for rows.Next() {
-// 		var problem models.Problem
-
-// 		// Scan the row into the problem struct
-// 		err = rows.Scan(&problem.ID, &problem.UserId, &problem.Name, &problem.Description, &problem.Constraints, &problem.InputFormat, &problem.OutputFormat)
-// 		if err != nil {
-// 			log.Fatalf("Unable to scan the row. %v", err)
-// 			w.WriteHeader(http.StatusInternalServerError)
-// 			return
-// 		}
-
-// 		// Append the problem to the slice
-// 		problems = append(problems, problem)
-// 	}
-
-// 	// Return the list of problems as JSON
-// 	w.WriteHeader(http.StatusOK)
-// 	json.NewEncoder(w).Encode(problems)
-// }
-
-func GetAllProblems(w http.ResponseWriter, r *http.Request) {
-	// Create a connection to the database
-	db := createConnection()
-	defer db.Close()
-
-	var requestBody models.RequestBody
-
-	err := json.NewDecoder(r.Body).Decode(&requestBody)
-	if err != nil || requestBody.UserID == 0 {
-		http.Error(w, "Invalid request body or missing user_id", http.StatusBadRequest)
+		httpError(w, http.StatusBadRequest, "invalid problem id")
 		return
 	}
 
-	// Convert user_id to int
-	// userID, err := strconv.Atoi(userIDStr)
-	// if err != nil {
-	// 	http.Error(w, "Invalid user_id format", http.StatusBadRequest)
-	// 	return
-	// }
-
-	// SQL query to get all problems
-	sqlStatement := `SELECT id, user_id, name, description, constraints, input_format, output_format FROM problems`
-
-	// Execute the query
-	rows, err := db.Query(sqlStatement)
+	problem, err := GetProblemByID(int64(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		httpError(w, http.StatusNotFound, "problem not found")
+		return
+	}
 	if err != nil {
-		log.Fatalf("Unable to execute the query. %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("GetProblem scan: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to fetch problem")
+		return
+	}
+	writeJSON(w, http.StatusOK, problem)
+}
+
+// GetAllProblems returns every problem, plus a "status" flag indicating whether
+// the given user has already solved it. user_id is taken from the query string,
+// e.g. /api/v1/problems?user_id=123.
+func GetAllProblems(w http.ResponseWriter, r *http.Request) {
+	userIDStr := r.URL.Query().Get("user_id")
+	if userIDStr == "" {
+		httpError(w, http.StatusBadRequest, "missing user_id query parameter")
+		return
+	}
+	userID, err := strconv.ParseInt(userIDStr, 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "invalid user_id")
+		return
+	}
+
+	db := DB()
+	rows, err := db.Query(
+		`SELECT p.id, p.user_id, p.name, p.description, p.constraints,
+		        p.input_format, p.output_format,
+		        EXISTS (SELECT 1 FROM submission s WHERE s.id = p.id AND s.user_id = $1) AS solved
+		 FROM problems p ORDER BY p.id`, userID)
+	if err != nil {
+		log.Printf("GetAllProblems query: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to fetch problems")
 		return
 	}
 	defer rows.Close()
 
-	// Slice to store the problems
-	var problems []map[string]interface{}
-
-	// Iterate over the rows
+	problems := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		var problem models.Problem
-
-		// Scan the row into the problem struct
-		err = rows.Scan(&problem.ID, &problem.UserId, &problem.Name, &problem.Description, &problem.Constraints, &problem.InputFormat, &problem.OutputFormat)
-		if err != nil {
-			log.Fatalf("Unable to scan the row. %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
+		var p models.Problem
+		var solved bool
+		if err := rows.Scan(
+			&p.ID, &p.UserId, &p.Name, &p.Description,
+			&p.Constraints, &p.InputFormat, &p.OutputFormat, &solved,
+		); err != nil {
+			log.Printf("GetAllProblems scan: %v", err)
+			httpError(w, http.StatusInternalServerError, "failed to scan problem")
 			return
 		}
-
-		// Check if the problem ID and user ID are present in the submission table
-		var status bool
-		checkStatement := `SELECT EXISTS (SELECT 1 FROM submission WHERE id=$1 AND user_id=$2)`
-		err = db.QueryRow(checkStatement, problem.ID, requestBody.UserID).Scan(&status)
-		if err != nil {
-			log.Fatalf("Unable to execute the check query. %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		// Append the problem and status to the slice
 		problems = append(problems, map[string]interface{}{
-			"id":            problem.ID,
-			"user_id":       problem.UserId,
-			"name":          problem.Name,
-			"description":   problem.Description,
-			"constraints":   problem.Constraints,
-			"input_format":  problem.InputFormat,
-			"output_format": problem.OutputFormat,
-			"status":        status,
+			"id":            p.ID,
+			"user_id":       p.UserId,
+			"name":          p.Name,
+			"description":   p.Description,
+			"constraints":   p.Constraints,
+			"input_format":  p.InputFormat,
+			"output_format": p.OutputFormat,
+			"status":        solved,
 		})
 	}
-
-	// Return the list of problems as JSON
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(problems)
+	if err := rows.Err(); err != nil {
+		log.Printf("GetAllProblems iter: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to read problems")
+		return
+	}
+	writeJSON(w, http.StatusOK, problems)
 }
 
+// CreateProblem inserts a new problem and returns the row with the generated ID.
 func CreateProblem(w http.ResponseWriter, r *http.Request) {
-	// Parse the JSON request body
 	var problem models.Problem
-	err := json.NewDecoder(r.Body).Decode(&problem)
-
-	if err != nil {
-		log.Fatalf("Unable to decode the request body. %v", err)
-		w.WriteHeader(http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&problem); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if problem.Name == "" || problem.Description == "" {
+		httpError(w, http.StatusBadRequest, "name and description are required")
 		return
 	}
 
-	db := createConnection()
-
-	// close the db connection
-	defer db.Close()
-
-	// Insert query
-	sqlStatement := `
-	INSERT INTO problems (user_id, name, description, constraints, input_format, output_format)
-	VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
-
-	// Execute the SQL statement
 	var id int
-	err = db.QueryRow(sqlStatement, problem.UserId, problem.Name, problem.Description, problem.Constraints, problem.InputFormat, problem.OutputFormat).Scan(&id)
-
+	err := DB().QueryRow(
+		`INSERT INTO problems (user_id, name, description, constraints, input_format, output_format)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		problem.UserId, problem.Name, problem.Description,
+		problem.Constraints, problem.InputFormat, problem.OutputFormat,
+	).Scan(&id)
 	if err != nil {
-		log.Fatalf("Unable to execute the query. %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("CreateProblem insert: %v", err)
+		httpError(w, http.StatusInternalServerError, "failed to create problem")
 		return
 	}
 
-	// Return the created problem with the generated ID
 	problem.ID = id
-	fmt.Println(problem.ID)
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(problem)
+	writeJSON(w, http.StatusCreated, problem)
 }

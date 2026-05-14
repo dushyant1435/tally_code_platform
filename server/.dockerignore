@@ -1,0 +1,6 @@
+.env
+*.env
+Dockerfile
+.dockerignore
+**/*.test
+**/temp_*.py

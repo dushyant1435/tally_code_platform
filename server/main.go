@@ -2,14 +2,24 @@ package main
 
 import (
 	"fmt"
-	"y/router"
 	"log"
 	"net/http"
-	// "github.com/gorilla/mux"
+	"os"
+	"y/handler"
+	"y/router"
 )
 
 func main() {
+	// Eagerly initialize the DB pool so we fail fast if Postgres is unreachable.
+	handler.DB()
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	addr := ":" + port
 	r := router.Router()
-	fmt.Println("Starting server on the port 8080...")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	fmt.Printf("Starting server on %s...\n", addr)
+	log.Fatal(http.ListenAndServe(addr, r))
 }

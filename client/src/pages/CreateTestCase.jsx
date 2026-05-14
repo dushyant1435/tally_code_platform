@@ -1,11 +1,20 @@
 import React, { useState } from 'react';
-import { TextField, Button, Box, Typography, Container, Checkbox, FormControlLabel } from '@mui/material';
+import {
+  TextField,
+  Button,
+  Box,
+  Typography,
+  Container,
+  Checkbox,
+  FormControlLabel,
+} from '@mui/material';
 import NavBar from '../components/NavBar';
 import { useParams } from 'react-router-dom';
+import { API_BASE } from '../config';
 
 const CreateTestCase = () => {
   const { id } = useParams();
-  let num = parseInt(id);
+  const num = parseInt(id, 10);
 
   const [testCase, setTestCase] = useState({
     id: num,
@@ -13,35 +22,39 @@ const CreateTestCase = () => {
     output: '',
     sample: false,
   });
+  const [statusMsg, setStatusMsg] = useState('');
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setTestCase({
-      ...testCase,
-      [name]: value,
-    });
+    setTestCase((prev) => ({ ...prev, [name]: value }));
   };
 
   const handleCheckboxChange = (e) => {
-    setTestCase({
-      ...testCase,
-      sample: e.target.checked,
-    });
+    setTestCase((prev) => ({ ...prev, sample: e.target.checked }));
   };
 
   const postTestCase = async () => {
-    const response = await fetch(`http://localhost:8080/api/v1/createTestCase`, {
-      method: "POST",
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(testCase),
-    });
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/createTestCase`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(testCase),
+      });
+      if (response.ok) {
+        setStatusMsg('Test case created.');
+        setTestCase({ id: num, input: '', output: '', sample: false });
+      } else {
+        const err = await response.json().catch(() => ({}));
+        setStatusMsg(`Failed: ${err.error || response.status}`);
+      }
+    } catch (err) {
+      console.error('postTestCase', err);
+      setStatusMsg('Failed to reach server.');
+    }
   };
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    console.log(testCase)
     postTestCase();
   };
 
@@ -52,12 +65,7 @@ const CreateTestCase = () => {
         <Box
           component="form"
           onSubmit={handleSubmit}
-          sx={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-            mt: 5,
-          }}
+          sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 5 }}
         >
           <Typography variant="h4" component="h1" align="center" gutterBottom>
             Add New Test Case
@@ -69,6 +77,8 @@ const CreateTestCase = () => {
             value={testCase.input}
             onChange={handleChange}
             required
+            multiline
+            rows={2}
             fullWidth
           />
           <TextField
@@ -94,6 +104,14 @@ const CreateTestCase = () => {
           <Button type="submit" variant="contained" color="primary" fullWidth>
             CREATE TEST CASE
           </Button>
+          {statusMsg && (
+            <Typography
+              variant="body2"
+              sx={{ color: statusMsg.startsWith('Test') ? 'green' : 'red' }}
+            >
+              {statusMsg}
+            </Typography>
+          )}
         </Box>
       </Container>
       <br />
