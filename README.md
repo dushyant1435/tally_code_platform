@@ -1,6 +1,6 @@
-# tally_code_platform
+# HardCode
 
-A small LeetCode-style online judge.
+> *Code hard. Win harder.*  A modern LeetCode-style online judge. Forged by **Dushyant Kuntal**.
 
 - **Backend**: Go + `gorilla/mux` + Postgres + JWT auth + bcrypt password hashes. Runs user-submitted Python in a subprocess with a per-request timeout.
 - **Frontend**: React (Create React App) + MUI + Monaco editor.

@@ -44,7 +44,7 @@ const Signup = () => {
           Create account
         </Typography>
         <Typography variant="body2" align="center" color="text.secondary" sx={{ mb: 3 }}>
-          on TALLY Code Platform
+          on HardCode
         </Typography>
 
         <Box component="form" onSubmit={submit} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

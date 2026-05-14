@@ -3,7 +3,7 @@
 set -e
 
 echo "============================================================"
-echo " tally_code_platform - one-click start"
+echo " HardCode - one-click start  (by Dushyant Kuntal)"
 echo "============================================================"
 echo
 
@@ -35,8 +35,8 @@ EOF
   exit 1
 fi
 
-echo "[OK] Docker is ready. Building images and starting containers..."
-echo "(First run downloads ~1 GB of base images and builds the React app."
+echo "[OK] Docker is ready. Building images and starting HardCode..."
+echo "(First run downloads base images and builds the React app."
 echo " Expect 5-10 minutes the first time. Subsequent runs are instant.)"
 echo
 

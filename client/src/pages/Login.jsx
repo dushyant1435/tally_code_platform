@@ -45,7 +45,7 @@ const Login = () => {
           Sign in
         </Typography>
         <Typography variant="body2" align="center" color="text.secondary" sx={{ mb: 3 }}>
-          to TALLY Code Platform
+          to HardCode
         </Typography>
 
         <Box component="form" onSubmit={submit} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

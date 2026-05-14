@@ -47,10 +47,13 @@ const Home = () => {
       >
         <Container maxWidth="md">
           <Typography variant="h2" fontWeight={800} sx={{ letterSpacing: '.05em' }}>
-            TALLY
+            HardCode
           </Typography>
-          <Typography variant="h6" sx={{ opacity: 0.8, mb: 3 }}>
-            A small online judge for competitive coding practice.
+          <Typography variant="h6" sx={{ opacity: 0.85, mb: 1 }}>
+            Code hard. Win harder.
+          </Typography>
+          <Typography variant="body2" sx={{ opacity: 0.65, mb: 3 }}>
+            Forged by Dushyant Kuntal
           </Typography>
           {isAuthenticated ? (
             <Stack direction="row" spacing={2}>

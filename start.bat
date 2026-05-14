@@ -5,7 +5,7 @@ REM One-click start for tally_code_platform on Windows.
 REM Double-click this file, or run it from cmd / PowerShell.
 
 echo ============================================================
-echo  tally_code_platform - one-click start
+echo  HardCode - one-click start  (by Dushyant Kuntal)
 echo ============================================================
 echo.
 
@@ -38,9 +38,9 @@ if errorlevel 1 (
 )
 
 REM --- build + start -------------------------------------------
-echo [OK] Docker is ready. Building images and starting containers...
+echo [OK] Docker is ready. Building images and starting HardCode...
 echo.
-echo (First run downloads ~1 GB of base images and builds the React app.
+echo (First run downloads base images and builds the React app.
 echo  Expect 5-10 minutes the first time. Subsequent runs are instant.)
 echo.
 

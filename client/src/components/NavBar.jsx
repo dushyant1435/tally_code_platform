@@ -54,13 +54,13 @@ const NavBar = () => {
             sx={{
               fontFamily: 'monospace',
               fontWeight: 700,
-              letterSpacing: '.3rem',
+              letterSpacing: '.2rem',
               color: 'inherit',
               textDecoration: 'none',
               mr: 3,
             }}
           >
-            TALLY
+            HardCode
           </Typography>
 
           <Box sx={{ flexGrow: 1, display: 'flex', gap: 0.5 }}>
