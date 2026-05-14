@@ -20,14 +20,15 @@ const (
 )
 
 type execResult struct {
-	Stdout  string
-	Stderr  string
-	Runtime float64
+	Stdout   string
+	Stderr   string
+	Runtime  float64
 	TimedOut bool
+	ExitCode int
 }
 
 // runPython writes code to a fresh temp file and executes it once with the
-// supplied stdin, returning the captured stdout/stderr and elapsed time.
+// supplied stdin, returning captured stdout/stderr and elapsed time.
 func runPython(ctx context.Context, code, stdin string) (execResult, error) {
 	f, err := os.CreateTemp("", "tally-*.py")
 	if err != nil {
@@ -59,15 +60,14 @@ func runPython(ctx context.Context, code, stdin string) (execResult, error) {
 		Stderr:  stderr.String(),
 		Runtime: elapsed,
 	}
-
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res.TimedOut = true
 		return res, nil
 	}
 	if err != nil {
-		// Non-zero exit is not fatal for us; we still want stdout/stderr.
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
+			res.ExitCode = exitErr.ExitCode()
 			return res, nil
 		}
 		return res, err
@@ -76,12 +76,22 @@ func runPython(ctx context.Context, code, stdin string) (execResult, error) {
 }
 
 // RunCode executes the submitted code against every test case for a problem.
-// On full pass it records a row in `submission` (idempotent).
+// Records a submissions row with the resulting verdict and returns it.
+// Requires authentication.
 func RunCode(w http.ResponseWriter, r *http.Request) {
+	c := ClaimsFromContext(r.Context())
+	if c == nil {
+		httpError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	var req models.CodeData
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	if req.Language == "" {
+		req.Language = "python"
 	}
 
 	db := DB()
@@ -93,11 +103,13 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	allPassed := true
-	totalRuntime := 0.0
-	rowCount := 0
-	var failedAt int
-	var failMessage string
+	var (
+		status         = models.StatusAccepted
+		message        string
+		failedAt       int
+		totalRuntime   float64
+		rowCount       int
+	)
 
 	for rows.Next() {
 		rowCount++
@@ -112,65 +124,59 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 		res, runErr := runPython(ctx, req.Code, input)
 		cancel()
 
-		if runErr != nil {
-			log.Printf("RunCode exec: %v", runErr)
-			allPassed = false
-			failedAt = rowCount
-			failMessage = "execution error"
-			break
-		}
-		if res.TimedOut {
-			allPassed = false
-			failedAt = rowCount
-			failMessage = "time limit exceeded"
-			break
-		}
-
 		if res.Runtime > totalRuntime {
 			totalRuntime = res.Runtime
 		}
 
-		if strings.TrimSpace(res.Stdout) != strings.TrimSpace(expected) {
-			allPassed = false
-			failedAt = rowCount
-			failMessage = "wrong answer"
-			break
+		switch {
+		case runErr != nil:
+			status, message, failedAt = models.StatusServerError, runErr.Error(), rowCount
+		case res.TimedOut:
+			status, message, failedAt = models.StatusTimeLimitExceeded,
+				fmt.Sprintf("exceeded %s on test %d", executionTimeout, rowCount), rowCount
+		case res.ExitCode != 0:
+			snippet := strings.TrimSpace(res.Stderr)
+			if len(snippet) > 200 {
+				snippet = snippet[:200] + "..."
+			}
+			status, message, failedAt = models.StatusRuntimeError, snippet, rowCount
+		case strings.TrimSpace(res.Stdout) != strings.TrimSpace(expected):
+			status, message, failedAt = models.StatusWrongAnswer,
+				fmt.Sprintf("expected %q, got %q",
+					strings.TrimSpace(expected),
+					strings.TrimSpace(res.Stdout)), rowCount
+		default:
+			continue
 		}
+		break
 	}
 	if err := rows.Err(); err != nil {
 		log.Printf("RunCode iter: %v", err)
 		httpError(w, http.StatusInternalServerError, "failed to read test cases")
 		return
 	}
-
 	if rowCount == 0 {
-		allPassed = false
-		failMessage = "no test cases configured for this problem"
+		status, message = models.StatusNoTestCases, "this problem has no test cases yet"
 	}
 
-	if allPassed {
-		_, err := db.Exec(
-			`INSERT INTO submission (id, user_id) VALUES ($1, $2)
-			 ON CONFLICT (id, user_id) DO NOTHING`,
-			req.ID, req.UserID,
-		)
-		if err != nil {
-			log.Printf("RunCode submission insert: %v", err)
-		}
+	subID, err := recordSubmission(req.ID, c.UserID, req.Language, req.Code, status,
+		totalRuntime, failedAt, message)
+	if err != nil {
+		log.Printf("RunCode record submission: %v", err)
 	}
 
-	resp := map[string]interface{}{
-		"success":      allPassed,
-		"totalRuntime": totalRuntime,
-		"memoryUsed":   0,
-		"failedAt":     failedAt,
-		"message":      failMessage,
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"submission_id": subID,
+		"status":        status,
+		"success":       status == models.StatusAccepted,
+		"totalRuntime":  totalRuntime,
+		"failedAt":      failedAt,
+		"message":       message,
+	})
 }
 
 // CustomRunCode runs the code once with the user-provided stdin and returns
-// the captured output (Playground endpoint).
+// the captured output (Playground endpoint). Does not require auth.
 func CustomRunCode(w http.ResponseWriter, r *http.Request) {
 	var req models.CustomCodeData
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -189,17 +195,21 @@ func CustomRunCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	output := strings.TrimRight(res.Stdout, "\n")
-	if res.TimedOut {
-		output = strings.TrimSpace(output + "\n[time limit exceeded after " + fmt.Sprintf("%.1fs", executionTimeout.Seconds()) + "]")
-	} else if res.Stderr != "" {
+	switch {
+	case res.TimedOut:
+		output = strings.TrimSpace(output + "\n[time limit exceeded after " +
+			fmt.Sprintf("%.1fs", executionTimeout.Seconds()) + "]")
+	case res.Stderr != "":
 		output = strings.TrimSpace(output + "\n" + res.Stderr)
 	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"output": output})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"output":  output,
+		"runtime": res.Runtime,
+	})
 }
 
 // RunSampleCode runs the code against only the sample test cases and returns
-// per-case results so the UI can show actual-vs-expected.
+// per-case results. Does not record a submission. Auth optional.
 func RunSampleCode(w http.ResponseWriter, r *http.Request) {
 	var req models.CodeData
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -240,7 +250,7 @@ func RunSampleCode(w http.ResponseWriter, r *http.Request) {
 			actual = "execution error: " + runErr.Error()
 		case res.TimedOut:
 			actual = "time limit exceeded"
-		case res.Stderr != "":
+		case res.ExitCode != 0:
 			actual = strings.TrimSpace(res.Stderr)
 		default:
 			passed = strings.TrimSpace(actual) == strings.TrimSpace(expected)
@@ -250,12 +260,11 @@ func RunSampleCode(w http.ResponseWriter, r *http.Request) {
 		}
 
 		results = append(results, map[string]interface{}{
-			"input":       input,
-			"expected":    expected,
-			"output":      actual,
-			"result":      passed,
-			"runtime":     fmt.Sprintf("%.3fs", res.Runtime),
-			"memory_used": "-",
+			"input":    input,
+			"expected": expected,
+			"output":   actual,
+			"result":   passed,
+			"runtime":  fmt.Sprintf("%.3fs", res.Runtime),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -263,7 +272,6 @@ func RunSampleCode(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, "failed to read test cases")
 		return
 	}
-
 	if rowCount == 0 {
 		allPassed = false
 	}

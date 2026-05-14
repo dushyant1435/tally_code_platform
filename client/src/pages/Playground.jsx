@@ -1,67 +1,105 @@
 import React, { useState } from 'react';
-import CodeEditor from '../components/CodeEditor';
+import {
+  Box,
+  Button,
+  CircularProgress,
+  Container,
+  Grid,
+  Paper,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import NavBar from '../components/NavBar';
-import TextBox from '../components/Textbox';
-import { Button, Grid } from '@mui/material';
+import CodeEditor from '../components/CodeEditor';
 import { CODE_SNIPPETS } from '../constants';
-import { API_BASE } from '../config';
+import { api } from '../api';
 
 const Playground = () => {
-  const [value, setValue] = useState(CODE_SNIPPETS['python']);
-  const [inputValue, setInputValue] = useState('');
-  const [outputValue, setOutputValue] = useState('');
+  const [code, setCode] = useState(CODE_SNIPPETS.python);
+  const [language, setLanguage] = useState('python');
+  const [input, setInput] = useState('');
+  const [output, setOutput] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  const handleSubmit = async () => {
+  const run = async () => {
+    setBusy(true);
     try {
-      const response = await fetch(`${API_BASE}/api/v1/runCustomCode`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code: value,
-          input: inputValue ?? '',
-        }),
-      });
-      const data = await response.json();
-      setOutputValue(data.output ?? '');
+      const data = await api.post('/api/v1/runCustomCode', { code, input, language });
+      setOutput(data.output ?? '');
     } catch (err) {
-      console.error('Playground run', err);
-      setOutputValue('Error: failed to reach server');
+      setOutput(`Error: ${err.message}`);
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <>
       <NavBar />
-      <div>
-        <CodeEditor value={value} setValue={setValue} />
-      </div>
-
-      <Grid container spacing={2} sx={{ px: 3 }}>
-        <Grid item xs={12}>
-          <Button
-            variant="contained"
-            sx={{ backgroundColor: 'green', width: '100%' }}
-            onClick={handleSubmit}
-          >
-            RUN CODE
-          </Button>
+      <Container maxWidth="xl" sx={{ mt: 3, mb: 6 }}>
+        <Typography variant="h4" fontWeight={700} sx={{ mb: 2 }}>
+          Playground
+        </Typography>
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={7}>
+            <Paper sx={{ p: 2 }} elevation={1}>
+              <CodeEditor
+                value={code}
+                setValue={setCode}
+                language={language}
+                setLanguage={setLanguage}
+              />
+              <Button
+                fullWidth
+                variant="contained"
+                color="success"
+                onClick={run}
+                disabled={busy}
+                startIcon={busy ? <CircularProgress size={18} color="inherit" /> : <PlayArrowIcon />}
+                sx={{ mt: 1 }}
+              >
+                Run
+              </Button>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} md={5}>
+            <Stack spacing={2}>
+              <Paper sx={{ p: 2 }} elevation={1}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  stdin
+                </Typography>
+                <TextField
+                  multiline
+                  minRows={6}
+                  fullWidth
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Type any input your program reads from stdin…"
+                />
+              </Paper>
+              <Paper sx={{ p: 2, backgroundColor: '#1e1e1e', color: '#e0e0e0' }} elevation={1}>
+                <Typography variant="subtitle2" sx={{ mb: 1, color: '#e0e0e0' }}>
+                  output
+                </Typography>
+                <Box
+                  component="pre"
+                  sx={{
+                    m: 0,
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    minHeight: 140,
+                    whiteSpace: 'pre-wrap',
+                  }}
+                >
+                  {output || '\u00a0'}
+                </Box>
+              </Paper>
+            </Stack>
+          </Grid>
         </Grid>
-      </Grid>
-
-      <Grid container spacing={2} sx={{ px: 3, mt: 2 }}>
-        <Grid item xs={12} md={6}>
-          <Button variant="contained" sx={{ backgroundColor: 'blue', width: '100%' }}>
-            INPUT
-          </Button>
-          <TextBox value={inputValue} setValue={setInputValue} />
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <Button variant="contained" sx={{ backgroundColor: 'blue', width: '100%' }}>
-            OUTPUT
-          </Button>
-          <TextBox value={outputValue} setValue={setOutputValue} />
-        </Grid>
-      </Grid>
+      </Container>
     </>
   );
 };

@@ -1,22 +1,26 @@
 # tally_code_platform
 
-A small competitive-coding / online-judge platform.
+A small LeetCode-style online judge.
 
-- **Backend**: Go + `gorilla/mux` + Postgres. Executes user-submitted Python in a sandboxed subprocess with a per-run timeout.
+- **Backend**: Go + `gorilla/mux` + Postgres + JWT auth + bcrypt password hashes. Runs user-submitted Python in a subprocess with a per-request timeout.
 - **Frontend**: React (Create React App) + MUI + Monaco editor.
-- **Database**: Postgres, schema in [`db/init.sql`](db/init.sql).
+- **Database**: Postgres, schema and seed data in [`db/init.sql`](db/init.sql).
 
-Three modes (visible on the home page):
+## Features
 
-1. **Playground** — free-form editor, run code with custom stdin.
-2. **Coding Arena** — list of problems, write code, run against sample test cases, submit against the full suite.
-3. **Code Battle** — placeholder for contests.
+- Username/email + password **signup & login**, JWT-based sessions.
+- Two roles: **user** and **admin**. Admins can author problems and test cases and see every user's submissions.
+- Problems list with **difficulty** (easy / medium / hard), **tags**, search, filter, and per-user solved status.
+- Problem detail with **Description** / **Submissions** tabs, sample test cases, real-time **Run** (sample only) and **Submit** (full judge).
+- Verdicts: `accepted`, `wrong_answer`, `time_limit_exceeded`, `runtime_error`, `no_test_cases`, `server_error`.
+- Every submission is persisted with status, language, runtime, failing test number, and a short message. Browse them on the **Submissions** page or per-problem tab.
+- **Playground** for running custom code with your own stdin.
 
 ---
 
 ## One-click start (Docker)
 
-Requires **Docker Desktop** (Windows / macOS) or **Docker Engine** (Linux). Nothing else needs to be installed — Go, Node, Python and Postgres all live inside containers.
+Requires **Docker Desktop** (Windows / macOS) or Docker Engine + the compose plugin (Linux). Nothing else needs to be installed — Go, Node, Python and Postgres all live inside containers.
 
 ### Windows
 
@@ -29,45 +33,76 @@ chmod +x start.sh stop.sh
 ./start.sh
 ```
 
-Either way, after the build finishes:
+After the build finishes:
 
 - Frontend: <http://localhost:3000>
 - API:      <http://localhost:8080/api/v1/health>
 
-To shut everything down:
+### Demo accounts (seeded automatically)
+
+| Username | Password   | Role  |
+| -------- | ---------- | ----- |
+| `admin`  | `admin123` | admin |
+| `demo`   | `demo123`  | user  |
+
+You can also create your own account from the **Sign up** page; new accounts are regular users.
+
+### Shutting down / wiping
 
 - Windows: `stop.bat`
 - macOS / Linux: `./stop.sh`
-
-To wipe the database too:
-
-```bash
-docker compose down -v
-```
+- Wipe the database too: `docker compose down -v`
 
 ### Custom config
 
-Copy `.env.example` to `.env` at the repo root and edit any of:
+Copy `.env.example` → `.env` in the repo root and edit any of:
 
 ```
 POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_PORT
 SERVER_PORT
 CLIENT_PORT
 CORS_ALLOWED_ORIGINS
-REACT_APP_API_URL
+JWT_SECRET              # change for production
+REACT_APP_API_URL       # baked into the React bundle at build time
 ```
 
-`docker compose` picks `.env` up automatically.
+> If you change `JWT_SECRET` after users have signed in, every existing token is invalidated. People simply have to log in again.
+
+---
+
+## API
+
+| Method | Path | Auth | Description |
+| ------ | ---- | ---- | ----------- |
+| GET    | `/api/v1/health`                                  | public  | Liveness probe. |
+| POST   | `/api/v1/auth/signup`                             | public  | `{username, email, password}` → `{token, user}`. |
+| POST   | `/api/v1/auth/login`                              | public  | `{username, password}` (username or email) → `{token, user}`. |
+| GET    | `/api/v1/auth/me`                                 | user    | Current user. |
+| GET    | `/api/v1/problems`                                | optional| List with difficulty/tags and per-user solved flag. |
+| GET    | `/api/v1/problem/{id}`                            | public  | One problem; 404 if missing. |
+| POST   | `/api/v1/newproblem`                              | **admin** | Create a problem (`difficulty`, `tags[]`). |
+| GET    | `/api/v1/testcases/{id}`                          | public  | All test cases. |
+| GET    | `/api/v1/problem/{id}/sampleTestCases`            | public  | Sample test cases only. |
+| POST   | `/api/v1/createTestCase`                          | **admin** | Add a test case. |
+| POST   | `/api/v1/runCode`                                 | user    | Full judge; records a submission. |
+| POST   | `/api/v1/runSampleCode`                           | public  | Sample-only run (no submission recorded). |
+| POST   | `/api/v1/runCustomCode`                           | public  | Playground custom-stdin run. |
+| GET    | `/api/v1/submissions`                             | user    | My recent submissions (optional `?problem_id=`). |
+| GET    | `/api/v1/submissions/{id}`                        | user    | One submission (owner or admin). |
+| GET    | `/api/v1/problem/{id}/submissions`                | user    | My submissions for one problem. |
+| GET    | `/api/v1/admin/submissions`                       | **admin** | Every submission across every user. |
+
+Auth header: `Authorization: Bearer <jwt>`. The client stores the token in `localStorage` under `tally.token`.
 
 ---
 
 ## Local development (without Docker)
 
-You only need this if you want hot-reloading. The Docker setup is more than enough for end-to-end testing.
+Only needed if you want hot-reload. Otherwise just use Docker.
 
 ### Prereqs
 
-- Go 1.19+
+- Go 1.22+
 - Node 18+
 - Python 3 on `PATH` (the server shells out to `python3`)
 - A running Postgres instance
@@ -83,23 +118,18 @@ psql -U postgres -d codedb -f db/init.sql
 
 ```bash
 cd server
-cp .env.example .env       # edit POSTGRES_URL if needed
+cp .env.example .env       # edit POSTGRES_URL & JWT_SECRET if needed
 go run main.go
 ```
-
-The API listens on `:8080`.
 
 ### Client
 
 ```bash
 cd client
 npm install
-# Point the client at your local API:
 echo "REACT_APP_API_URL=http://localhost:8080" > .env
 npm start
 ```
-
-The dev server listens on `:3000` with hot-reload.
 
 ---
 
@@ -107,96 +137,57 @@ The dev server listens on `:3000` with hot-reload.
 
 ```
 .
-├── client/                  # React app
-│   ├── Dockerfile           # multi-stage build -> nginx
-│   ├── nginx.conf           # SPA fallback + caching
+├── client/                       # React app
+│   ├── Dockerfile / nginx.conf
 │   └── src/
-│       ├── config.js        # API_BASE + CURRENT_USER_ID
-│       ├── components/      # CodeEditor, Textbox, NavBar
-│       └── pages/           # Home, Problems, Problem, Playground, ...
-├── server/                  # Go API
-│   ├── Dockerfile           # multi-stage build, runtime has python3
-│   ├── handler/             # HTTP handlers + DB pool + Python runner
-│   ├── models/              # struct types
-│   ├── router/              # routes + CORS middleware
+│       ├── api.js                # fetch wrapper that injects JWT
+│       ├── config.js             # API_BASE + token helpers
+│       ├── auth/
+│       │   ├── AuthContext.jsx   # login/signup/logout + /me hydration
+│       │   └── ProtectedRoute.jsx
+│       ├── components/
+│       │   ├── NavBar.jsx        # nav with user dropdown / admin badge
+│       │   ├── Badges.jsx        # Difficulty + Status chips
+│       │   └── CodeEditor.js
+│       └── pages/
+│           ├── Home / Login / Signup
+│           ├── Problems / Problem
+│           ├── Submissions / SubmissionDetail
+│           ├── Playground
+│           └── AdminHome / CreateProblem / CreateTestCase
+├── server/                       # Go API
+│   ├── Dockerfile
+│   ├── cmd/hashgen/              # tiny CLI: bcrypt-hash a password
+│   ├── handler/
+│   │   ├── auth.go               # signup / login / JWT middleware
+│   │   ├── problem.go            # problems CRUD (+ solved flag)
+│   │   ├── testCases.go
+│   │   ├── runCode.go            # judge + records submission
+│   │   ├── submissions.go        # history endpoints
+│   │   └── dbConnection.go       # singleton pool with retry
+│   ├── models/                   # struct types
+│   ├── router/                   # routes + CORS
 │   └── main.go
-├── db/init.sql              # schema + seed data
+├── db/init.sql                   # schema + seed data + seed users
 ├── docker-compose.yml
-├── .env.example
-├── start.bat / start.sh     # one-click launchers
-└── stop.bat  / stop.sh
+└── start.bat / stop.bat / start.sh / stop.sh
 ```
-
----
-
-## API
-
-| Method | Path | Body / Query | Description |
-| ------ | ---- | ------------ | ----------- |
-| GET    | `/api/v1/health`                             | —                                 | Liveness probe. |
-| GET    | `/api/v1/problems?user_id=<id>`              | —                                 | List problems with per-user `status`. |
-| GET    | `/api/v1/problem/{id}`                       | —                                 | Single problem; 404 if missing. |
-| POST   | `/api/v1/newproblem`                         | `Problem`                         | Create a problem. |
-| GET    | `/api/v1/testcases/{id}`                     | —                                 | All test cases for a problem. |
-| GET    | `/api/v1/problem/{id}/sampleTestCases`       | —                                 | Sample-only test cases. |
-| POST   | `/api/v1/createTestCase`                     | `TestCase`                        | Add a test case to a problem. |
-| POST   | `/api/v1/runCode`                            | `{id, code, user_id}`             | Run against all test cases; records a submission on success. |
-| POST   | `/api/v1/runSampleCode`                      | `{id, code, user_id}`             | Run against sample test cases only; returns per-case results. |
-| POST   | `/api/v1/runCustomCode`                      | `{code, input}`                   | Run with user-supplied stdin (Playground). |
 
 ---
 
 ## Hosting
 
-The whole thing ships as three containers (`postgres`, `server`, `client`) with no host-specific glue, so any Docker-friendly host works. Two easy paths:
-
-### Option A: any VPS (DigitalOcean, Hetzner, EC2, Linode, …)
-
-1. SSH into a fresh Linux box and install Docker + Docker Compose.
-2. `git clone <your-repo>` and `cd` into it.
-3. Create a `.env` and set at least:
-   ```
-   POSTGRES_PASSWORD=<strong-random-string>
-   CORS_ALLOWED_ORIGINS=https://<your-domain>
-   REACT_APP_API_URL=https://<your-domain>/api
-   ```
-4. Put nginx / Caddy / Traefik in front to terminate TLS and reverse-proxy:
-   - `https://<your-domain>/`        → `tally-client:80`
-   - `https://<your-domain>/api/`    → `tally-server:8080`
-5. `docker compose up -d --build`.
-
-A minimal Caddyfile is enough:
-
-```
-your-domain.com {
-    reverse_proxy /api/* tally-server:8080
-    reverse_proxy *      tally-client:80
-}
-```
-
-### Option B: Render / Railway / Fly.io
-
-These all detect the per-service `Dockerfile`s. Deploy each service from the same repo:
-
-1. **Postgres** — use the platform's managed Postgres (free tiers on Render and Railway). Run `db/init.sql` once against it.
-2. **Server** — root directory `server/`, build via Dockerfile, env vars:
-   - `POSTGRES_URL`
-   - `PORT` (Render injects this — the server already honors it)
-   - `CORS_ALLOWED_ORIGINS=https://<client-url>`
-3. **Client** — root directory `client/`, build via Dockerfile, build arg:
-   - `REACT_APP_API_URL=https://<server-url>`
-
-After deploy, open the client URL.
+See the previous `Hosting` section, with one addition: in production set a **strong random** `JWT_SECRET` and a real `CORS_ALLOWED_ORIGINS`.
 
 ### Production safety checklist
 
-The code-execution endpoint runs arbitrary Python in the server container. The container isolation buys you a lot, but for anything past a demo you should also:
+The code-execution endpoint runs arbitrary Python inside the server container. Container isolation buys you a lot, but for anything past a demo you should also:
 
-- Lower the per-run timeout in `server/handler/runCode.go` (`executionTimeout`).
-- Run user code in a separate, throw-away container per request (Docker-in-Docker or a sidecar runner).
+- Run user code in a separate, throwaway container per request (Docker-in-Docker or a sidecar runner).
 - Drop network access from the runner.
-- Add rate limiting on the `/run*` endpoints.
-- Replace the hardcoded `user_id: 123` in `client/src/config.js` with real auth.
+- Add rate limiting on `/api/v1/run*` and `/api/v1/auth/*`.
+- Switch JWTs to HTTP-only cookies (currently they're in `localStorage` for simplicity).
+- Lower `executionTimeout` in `server/handler/runCode.go` for stricter judging.
 
 ---
 

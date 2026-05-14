@@ -1,120 +1,82 @@
 import React, { useState } from 'react';
 import {
-  TextField,
-  Button,
+  Alert,
   Box,
-  Typography,
-  Container,
+  Button,
   Checkbox,
+  Container,
   FormControlLabel,
+  Paper,
+  TextField,
+  Typography,
 } from '@mui/material';
-import NavBar from '../components/NavBar';
 import { useParams } from 'react-router-dom';
-import { API_BASE } from '../config';
+import NavBar from '../components/NavBar';
+import { api } from '../api';
 
 const CreateTestCase = () => {
   const { id } = useParams();
   const num = parseInt(id, 10);
 
-  const [testCase, setTestCase] = useState({
-    id: num,
-    input: '',
-    output: '',
-    sample: false,
-  });
+  const [testCase, setTestCase] = useState({ id: num, input: '', output: '', sample: false });
   const [statusMsg, setStatusMsg] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  const handleChange = (e) => {
+  const onChange = (e) => {
     const { name, value } = e.target;
     setTestCase((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleCheckboxChange = (e) => {
-    setTestCase((prev) => ({ ...prev, sample: e.target.checked }));
-  };
-
-  const postTestCase = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/api/v1/createTestCase`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(testCase),
-      });
-      if (response.ok) {
-        setStatusMsg('Test case created.');
-        setTestCase({ id: num, input: '', output: '', sample: false });
-      } else {
-        const err = await response.json().catch(() => ({}));
-        setStatusMsg(`Failed: ${err.error || response.status}`);
-      }
-    } catch (err) {
-      console.error('postTestCase', err);
-      setStatusMsg('Failed to reach server.');
-    }
-  };
-
-  const handleSubmit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
-    postTestCase();
+    setError('');
+    setStatusMsg('');
+    setBusy(true);
+    try {
+      await api.post('/api/v1/createTestCase', testCase);
+      setStatusMsg('Test case created.');
+      setTestCase({ id: num, input: '', output: '', sample: false });
+    } catch (err) {
+      setError(err.message || 'Failed to create test case');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <>
       <NavBar />
-      <Container maxWidth="sm">
-        <Box
-          component="form"
-          onSubmit={handleSubmit}
-          sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 5 }}
-        >
-          <Typography variant="h4" component="h1" align="center" gutterBottom>
-            Add New Test Case
+      <Container maxWidth="sm" sx={{ mt: 4 }}>
+        <Paper sx={{ p: 4 }} elevation={2}>
+          <Typography variant="h4" align="center" gutterBottom>
+            Add test case
+          </Typography>
+          <Typography variant="body2" align="center" color="text.secondary" sx={{ mb: 2 }}>
+            Problem #{num}
           </Typography>
 
-          <TextField
-            label="Input"
-            name="input"
-            value={testCase.input}
-            onChange={handleChange}
-            required
-            multiline
-            rows={2}
-            fullWidth
-          />
-          <TextField
-            label="Output"
-            name="output"
-            value={testCase.output}
-            onChange={handleChange}
-            required
-            multiline
-            rows={4}
-            fullWidth
-          />
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={testCase.sample}
-                onChange={handleCheckboxChange}
-                color="primary"
-              />
-            }
-            label="Sample"
-          />
-          <Button type="submit" variant="contained" color="primary" fullWidth>
-            CREATE TEST CASE
-          </Button>
-          {statusMsg && (
-            <Typography
-              variant="body2"
-              sx={{ color: statusMsg.startsWith('Test') ? 'green' : 'red' }}
-            >
-              {statusMsg}
-            </Typography>
-          )}
-        </Box>
+          <Box component="form" onSubmit={submit} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {error && <Alert severity="error">{error}</Alert>}
+            {statusMsg && <Alert severity="success">{statusMsg}</Alert>}
+
+            <TextField label="Input" name="input" value={testCase.input} onChange={onChange} required multiline rows={3} fullWidth />
+            <TextField label="Expected output" name="output" value={testCase.output} onChange={onChange} required multiline rows={3} fullWidth />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={testCase.sample}
+                  onChange={(e) => setTestCase((p) => ({ ...p, sample: e.target.checked }))}
+                />
+              }
+              label="Sample (visible to users on the problem page)"
+            />
+            <Button type="submit" variant="contained" disabled={busy} size="large">
+              {busy ? 'Saving…' : 'Add test case'}
+            </Button>
+          </Box>
+        </Paper>
       </Container>
-      <br />
     </>
   );
 };

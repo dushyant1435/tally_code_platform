@@ -1,8 +1,22 @@
 import React, { useState } from 'react';
-import { TextField, Button, Box, Typography, Container } from '@mui/material';
-import NavBar from '../components/NavBar';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  Container,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Paper,
+  Select,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import { API_BASE, CURRENT_USER_ID } from '../config';
+import NavBar from '../components/NavBar';
+import { api } from '../api';
 
 const CreateProblem = () => {
   const navigate = useNavigate();
@@ -12,111 +26,120 @@ const CreateProblem = () => {
     constraints: '',
     inputFormat: '',
     outputFormat: '',
+    difficulty: 'easy',
   });
+  const [tags, setTags] = useState([]);
+  const [tagInput, setTagInput] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  const handleChange = (e) => {
+  const onChange = (e) => {
     const { name, value } = e.target;
     setProblem((prev) => ({ ...prev, [name]: value }));
   };
 
-  const postProblem = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/api/v1/newproblem`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: problem.name,
-          constraints: problem.constraints,
-          description: problem.description,
-          input_format: problem.inputFormat,
-          output_format: problem.outputFormat,
-          user_id: CURRENT_USER_ID,
-        }),
-      });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        alert(`Failed to create problem: ${err.error || response.status}`);
-        return;
-      }
-      const data = await response.json();
-      if (data?.id) {
-        navigate(`/problem/${data.id}/testcase`);
-      }
-    } catch (err) {
-      console.error('postProblem', err);
-      alert('Failed to reach server.');
-    }
+  const addTag = () => {
+    const t = tagInput.trim().toLowerCase();
+    if (t && !tags.includes(t)) setTags([...tags, t]);
+    setTagInput('');
   };
 
-  const handleSubmit = (e) => {
+  const removeTag = (t) => setTags(tags.filter((x) => x !== t));
+
+  const submit = async (e) => {
     e.preventDefault();
-    postProblem();
+    setError('');
+    setBusy(true);
+    try {
+      const data = await api.post('/api/v1/newproblem', {
+        name: problem.name,
+        description: problem.description,
+        constraints: problem.constraints || null,
+        input_format: problem.inputFormat || null,
+        output_format: problem.outputFormat || null,
+        difficulty: problem.difficulty,
+        tags,
+      });
+      if (data?.id) {
+        navigate(`/admin/problem/${data.id}/testcase`);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to create problem');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <>
       <NavBar />
-      <Container maxWidth="sm">
-        <Box
-          component="form"
-          onSubmit={handleSubmit}
-          sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 5 }}
-        >
-          <Typography variant="h4" component="h1" align="center" gutterBottom>
-            Add New Problem
+      <Container maxWidth="sm" sx={{ mt: 4 }}>
+        <Paper sx={{ p: 4 }} elevation={2}>
+          <Typography variant="h4" align="center" gutterBottom>
+            New problem
           </Typography>
+          <Box component="form" onSubmit={submit} sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
+            {error && <Alert severity="error">{error}</Alert>}
+            <TextField label="Problem name" name="name" value={problem.name} onChange={onChange} required fullWidth />
+            <TextField
+              label="Description"
+              name="description"
+              value={problem.description}
+              onChange={onChange}
+              required
+              multiline
+              rows={4}
+              fullWidth
+            />
+            <FormControl fullWidth>
+              <InputLabel>Difficulty</InputLabel>
+              <Select
+                label="Difficulty"
+                name="difficulty"
+                value={problem.difficulty}
+                onChange={onChange}
+              >
+                <MenuItem value="easy">Easy</MenuItem>
+                <MenuItem value="medium">Medium</MenuItem>
+                <MenuItem value="hard">Hard</MenuItem>
+              </Select>
+            </FormControl>
 
-          <TextField
-            label="Problem Name"
-            name="name"
-            value={problem.name}
-            onChange={handleChange}
-            required
-            fullWidth
-          />
-          <TextField
-            label="Problem Description"
-            name="description"
-            value={problem.description}
-            onChange={handleChange}
-            required
-            multiline
-            rows={4}
-            fullWidth
-          />
-          <TextField
-            label="Constraints"
-            name="constraints"
-            value={problem.constraints}
-            onChange={handleChange}
-            multiline
-            rows={2}
-            fullWidth
-          />
-          <TextField
-            label="Input Format"
-            name="inputFormat"
-            value={problem.inputFormat}
-            onChange={handleChange}
-            multiline
-            rows={2}
-            fullWidth
-          />
-          <TextField
-            label="Output Format"
-            name="outputFormat"
-            value={problem.outputFormat}
-            onChange={handleChange}
-            multiline
-            rows={2}
-            fullWidth
-          />
-          <Button type="submit" variant="contained" color="primary" fullWidth>
-            CREATE CHALLENGE
-          </Button>
-        </Box>
+            <Box>
+              <Stack direction="row" spacing={1}>
+                <TextField
+                  label="Add tag"
+                  size="small"
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addTag();
+                    }
+                  }}
+                  fullWidth
+                />
+                <Button onClick={addTag} variant="outlined">
+                  Add
+                </Button>
+              </Stack>
+              <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                {tags.map((t) => (
+                  <Chip key={t} label={t} size="small" onDelete={() => removeTag(t)} />
+                ))}
+              </Stack>
+            </Box>
+
+            <TextField label="Constraints" name="constraints" value={problem.constraints} onChange={onChange} multiline rows={2} fullWidth />
+            <TextField label="Input format" name="inputFormat" value={problem.inputFormat} onChange={onChange} multiline rows={2} fullWidth />
+            <TextField label="Output format" name="outputFormat" value={problem.outputFormat} onChange={onChange} multiline rows={2} fullWidth />
+            <Button type="submit" variant="contained" disabled={busy} size="large">
+              {busy ? 'Creating…' : 'Create problem'}
+            </Button>
+          </Box>
+        </Paper>
       </Container>
-      <br />
     </>
   );
 };

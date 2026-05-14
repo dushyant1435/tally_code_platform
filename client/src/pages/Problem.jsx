@@ -1,228 +1,379 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
+  Box,
   Button,
+  Chip,
+  CircularProgress,
   Container,
-  Typography,
-  Paper,
+  Divider,
   Grid,
+  Paper,
+  Stack,
+  Tab,
+  Tabs,
+  Typography,
 } from '@mui/material';
-import CodeEditor from '../components/CodeEditor';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import SendIcon from '@mui/icons-material/Send';
+import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
 import NavBar from '../components/NavBar';
-import { useNavigate, useParams } from 'react-router-dom';
+import CodeEditor from '../components/CodeEditor';
+import { DifficultyBadge, StatusBadge } from '../components/Badges';
 import { CODE_SNIPPETS } from '../constants';
-import { API_BASE, CURRENT_USER_ID } from '../config';
+import { api } from '../api';
+import { useAuth } from '../auth/AuthContext';
+
+const TabPanel = ({ value, index, children }) =>
+  value === index ? <Box sx={{ pt: 2 }}>{children}</Box> : null;
 
 const Problem = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const num = parseInt(id, 10);
+  const { isAuthenticated, isAdmin } = useAuth();
+  const num = useMemo(() => parseInt(id, 10), [id]);
 
-  const [value, setValue] = useState(CODE_SNIPPETS['python']);
+  const [tab, setTab] = useState(0);
+  const [code, setCode] = useState(CODE_SNIPPETS.python);
+  const [language, setLanguage] = useState('python');
   const [problem, setProblem] = useState(null);
-  const [testCases, setTestCases] = useState([]);
-  const [output, setOutput] = useState([]);
-  const [submissionMsg, setSubmissionMsg] = useState('');
+  const [samples, setSamples] = useState([]);
+  const [sampleResults, setSampleResults] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
+  const [runBusy, setRunBusy] = useState(false);
+  const [submitBusy, setSubmitBusy] = useState(false);
+  const [verdict, setVerdict] = useState(null);
+  const [error, setError] = useState('');
 
-  const getSample = async () => {
+  const loadProblem = useCallback(async () => {
+    setError('');
     try {
-      const response = await fetch(
-        `${API_BASE}/api/v1/problem/${id}/sampleTestCases`,
-      );
-      if (!response.ok) return;
-      const data = await response.json();
-      setTestCases(Array.isArray(data) ? data : []);
+      const [p, s] = await Promise.all([
+        api.get(`/api/v1/problem/${id}`),
+        api.get(`/api/v1/problem/${id}/sampleTestCases`),
+      ]);
+      setProblem(p);
+      setSamples(Array.isArray(s) ? s : []);
     } catch (err) {
-      console.error('getSample', err);
+      setError(err.message || 'Failed to load problem');
     }
-  };
+  }, [id]);
 
-  const getProblem = async () => {
+  const loadSubmissions = useCallback(async () => {
+    if (!isAuthenticated) return;
     try {
-      const response = await fetch(`${API_BASE}/api/v1/problem/${id}`);
-      if (!response.ok) {
-        setProblem(null);
-        return;
-      }
-      const data = await response.json();
-      setProblem(data);
+      const data = await api.get(`/api/v1/problem/${id}/submissions`);
+      setSubmissions(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error('getProblem', err);
+      // 404 / 401 are OK here; just leave empty.
+      console.warn('loadSubmissions', err.message);
     }
-  };
-
-  const handleSubmit = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/api/v1/runCode`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: num,
-          code: value,
-          user_id: CURRENT_USER_ID,
-        }),
-      });
-      const data = await response.json();
-      if (data.success) {
-        setSubmissionMsg('All test cases passed! Problem solved.');
-      } else {
-        setSubmissionMsg(
-          data.message
-            ? `Failed${data.failedAt ? ` at test ${data.failedAt}` : ''}: ${data.message}`
-            : 'Submission failed.',
-        );
-      }
-    } catch (err) {
-      console.error('handleSubmit', err);
-      setSubmissionMsg('Error submitting code.');
-    }
-  };
-
-  const handleRunSample = async () => {
-    try {
-      const response = await fetch(`${API_BASE}/api/v1/runSampleCode`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: num,
-          code: value,
-          user_id: CURRENT_USER_ID,
-        }),
-      });
-      const data = await response.json();
-      setOutput(Array.isArray(data.results) ? data.results : []);
-    } catch (err) {
-      console.error('handleRunSample', err);
-    }
-  };
+  }, [id, isAuthenticated]);
 
   useEffect(() => {
-    getProblem();
-    getSample();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+    loadProblem();
+    loadSubmissions();
+  }, [loadProblem, loadSubmissions]);
+
+  const onRunSample = async () => {
+    setRunBusy(true);
+    try {
+      const data = await api.post('/api/v1/runSampleCode', {
+        id: num,
+        code,
+        language,
+      });
+      setSampleResults(Array.isArray(data.results) ? data.results : []);
+    } catch (err) {
+      setSampleResults([
+        { input: '', expected: '', output: err.message, result: false, runtime: '-' },
+      ]);
+    } finally {
+      setRunBusy(false);
+    }
+  };
+
+  const onSubmit = async () => {
+    if (!isAuthenticated) {
+      navigate('/login', { state: { from: `/problem/${id}` } });
+      return;
+    }
+    setSubmitBusy(true);
+    setVerdict(null);
+    try {
+      const data = await api.post('/api/v1/runCode', {
+        id: num,
+        code,
+        language,
+      });
+      setVerdict(data);
+      loadSubmissions();
+    } catch (err) {
+      setVerdict({ status: 'server_error', message: err.message });
+    } finally {
+      setSubmitBusy(false);
+    }
+  };
+
+  if (error) {
+    return (
+      <>
+        <NavBar />
+        <Container maxWidth="md" sx={{ mt: 4 }}>
+          <Alert severity="error">{error}</Alert>
+        </Container>
+      </>
+    );
+  }
+
+  if (!problem) {
+    return (
+      <>
+        <NavBar />
+        <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}>
+          <CircularProgress />
+        </Box>
+      </>
+    );
+  }
 
   return (
     <>
       <NavBar />
-      <br />
-      <Grid container spacing={0}>
-        <Grid item xs={3}>
-          <Button
-            variant="contained"
-            sx={{ backgroundColor: 'blue', width: '290px' }}
-            onClick={() => navigate(`/problem/${id}/testcase`)}
-          >
-            ADD TEST CASES
-          </Button>
-        </Grid>
-      </Grid>
+      <Container maxWidth="xl" sx={{ mt: 3, mb: 6 }}>
+        <Grid container spacing={2}>
+          {/* LEFT: description / submissions tabs */}
+          <Grid item xs={12} md={6}>
+            <Paper sx={{ p: 3 }} elevation={1}>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="h5" fontWeight={700}>
+                  {problem.id}. {problem.name}
+                </Typography>
+              </Stack>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
+                <DifficultyBadge difficulty={problem.difficulty} />
+                {(problem.tags || []).map((t) => (
+                  <Chip key={t} label={t} size="small" variant="outlined" />
+                ))}
+              </Stack>
 
-      <br />
-      <Container maxWidth="lg">
-        <div className="flex flex-col min-h-screen">
-          <main className="flex-1 py-8 md:py-12 grid md:grid-cols-2 gap-8 md:gap-12">
-            <Paper elevation={3} sx={{ padding: 3, backgroundColor: '#fff', color: '#333' }}>
-              {problem ? (
-                <>
-                  <Typography variant="h4" gutterBottom>
-                    {problem.name}
+              <Tabs value={tab} onChange={(_, v) => setTab(v)}>
+                <Tab label="Description" />
+                <Tab label={`Submissions${submissions.length ? ` (${submissions.length})` : ''}`} />
+              </Tabs>
+              <Divider />
+
+              <TabPanel value={tab} index={0}>
+                <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', mb: 2 }}>
+                  {problem.description}
+                </Typography>
+                {problem.constraints && (
+                  <>
+                    <Typography variant="subtitle2">Constraints</Typography>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mb: 2 }}>
+                      {problem.constraints}
+                    </Typography>
+                  </>
+                )}
+                {problem.input_format && (
+                  <>
+                    <Typography variant="subtitle2">Input format</Typography>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mb: 2 }}>
+                      {problem.input_format}
+                    </Typography>
+                  </>
+                )}
+                {problem.output_format && (
+                  <>
+                    <Typography variant="subtitle2">Output format</Typography>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mb: 2 }}>
+                      {problem.output_format}
+                    </Typography>
+                  </>
+                )}
+
+                <Typography variant="subtitle2" sx={{ mt: 2 }}>
+                  Examples
+                </Typography>
+                {samples.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No sample test cases for this problem yet.
                   </Typography>
-                  <Typography variant="h6">Problem Description</Typography>
-                  <Typography paragraph>{problem.description}</Typography>
-                  <Typography variant="h6">Constraints</Typography>
-                  <Typography paragraph>{problem.constraints}</Typography>
-                  <Typography variant="h6">Input</Typography>
-                  <Typography paragraph>{problem.input_format}</Typography>
-                  <Typography variant="h6">Output</Typography>
-                  <Typography paragraph>{problem.output_format}</Typography>
-                </>
-              ) : (
-                <Typography variant="h6" gutterBottom>
-                  Loading...
-                </Typography>
-              )}
-            </Paper>
-
-            <Paper elevation={3} sx={{ padding: 3, backgroundColor: '#fff', color: '#333' }}>
-              <CodeEditor value={value} setValue={setValue} />
-              <Grid container spacing={2}>
-                <Grid item xs={6}>
-                  <Button
-                    variant="contained"
-                    sx={{ backgroundColor: 'primary', '&:hover': { backgroundColor: 'darkgreen' } }}
-                    fullWidth
-                    onClick={handleRunSample}
-                  >
-                    Run Sample
-                  </Button>
-                </Grid>
-                <Grid item xs={6}>
-                  <Button
-                    variant="contained"
-                    sx={{ backgroundColor: 'green', '&:hover': { backgroundColor: 'darkgreen' } }}
-                    fullWidth
-                    onClick={handleSubmit}
-                  >
-                    Submit
-                  </Button>
-                </Grid>
-              </Grid>
-              {submissionMsg && (
-                <Typography
-                  variant="body1"
-                  sx={{ mt: 2, color: submissionMsg.startsWith('All') ? 'green' : 'red' }}
-                >
-                  {submissionMsg}
-                </Typography>
-              )}
-            </Paper>
-
-            <Paper elevation={3} sx={{ padding: 3, backgroundColor: '#fff', color: '#333' }}>
-              <Typography variant="h6">Test Cases</Typography>
-              {testCases.length > 0 ? (
-                testCases.map((testCase, index) => (
-                  <div key={index}>
-                    <Typography variant="subtitle1">Test Case {index + 1}</Typography>
-                    <Typography variant="body2">Input: {testCase.input}</Typography>
-                    <Typography variant="body2">
-                      Expected Output: {testCase.output}
-                    </Typography>
-                    <br />
-                  </div>
-                ))
-              ) : (
-                <Typography variant="body2">No test cases available</Typography>
-              )}
-
-              <Typography variant="h6">YOUR OUTPUT</Typography>
-              {output.length > 0 ? (
-                output.map((out, index) => (
-                  <div key={index}>
-                    <Typography variant="subtitle1">Test Case {index + 1}</Typography>
-                    <Typography
-                      variant="body2"
-                      color={out.result ? 'green' : 'red'}
+                ) : (
+                  samples.map((tc, i) => (
+                    <Paper
+                      key={i}
+                      variant="outlined"
+                      sx={{ p: 2, mt: 1, backgroundColor: '#fafafa' }}
                     >
-                      Your Output: {out.output}
-                    </Typography>
-                    <Typography variant="body2" color="grey">
-                      runtime: {out.runtime}
-                    </Typography>
-                    <Typography variant="body2" color="grey">
-                      memory: {out.memory_used}
-                    </Typography>
-                    <br />
-                  </div>
-                ))
-              ) : (
-                <Typography variant="body2">PLEASE RUN THE CODE</Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Example {i + 1}
+                      </Typography>
+                      <Box component="pre" sx={{ m: 0, fontSize: 13 }}>
+                        Input:  {tc.input}
+                        {'\n'}Output: {tc.output}
+                      </Box>
+                    </Paper>
+                  ))
+                )}
+
+                {isAdmin && (
+                  <Box sx={{ mt: 3 }}>
+                    <Button
+                      variant="outlined"
+                      component={RouterLink}
+                      to={`/admin/problem/${id}/testcase`}
+                    >
+                      Add test cases
+                    </Button>
+                  </Box>
+                )}
+              </TabPanel>
+
+              <TabPanel value={tab} index={1}>
+                {!isAuthenticated ? (
+                  <Typography variant="body2" color="text.secondary">
+                    Sign in to see your submissions.
+                  </Typography>
+                ) : submissions.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No submissions yet for this problem.
+                  </Typography>
+                ) : (
+                  <Stack spacing={1}>
+                    {submissions.map((s) => (
+                      <Paper
+                        key={s.id}
+                        variant="outlined"
+                        sx={{
+                          p: 1.5,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 2,
+                        }}
+                      >
+                        <StatusBadge status={s.status} />
+                        <Box sx={{ flex: 1 }}>
+                          <Typography variant="body2">
+                            {s.language} ·{' '}
+                            {s.runtime_seconds != null
+                              ? `${s.runtime_seconds.toFixed(3)}s`
+                              : '—'}
+                            {s.failed_test ? ` · failed test #${s.failed_test}` : ''}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {new Date(s.created_at).toLocaleString()}
+                          </Typography>
+                        </Box>
+                      </Paper>
+                    ))}
+                  </Stack>
+                )}
+              </TabPanel>
+            </Paper>
+          </Grid>
+
+          {/* RIGHT: editor + run/submit */}
+          <Grid item xs={12} md={6}>
+            <Paper sx={{ p: 3 }} elevation={1}>
+              <CodeEditor
+                value={code}
+                setValue={setCode}
+                language={language}
+                setLanguage={setLanguage}
+              />
+
+              <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+                <Button
+                  variant="outlined"
+                  startIcon={runBusy ? <CircularProgress size={16} /> : <PlayArrowIcon />}
+                  onClick={onRunSample}
+                  disabled={runBusy}
+                  fullWidth
+                >
+                  Run
+                </Button>
+                <Button
+                  variant="contained"
+                  color="success"
+                  startIcon={submitBusy ? <CircularProgress size={16} color="inherit" /> : <SendIcon />}
+                  onClick={onSubmit}
+                  disabled={submitBusy}
+                  fullWidth
+                >
+                  Submit
+                </Button>
+              </Stack>
+
+              {verdict && (
+                <Box sx={{ mt: 2 }}>
+                  <Alert
+                    severity={verdict.success ? 'success' : 'error'}
+                    icon={false}
+                  >
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+                      <StatusBadge status={verdict.status} />
+                      {verdict.totalRuntime != null && (
+                        <Typography variant="caption" color="text.secondary">
+                          {verdict.totalRuntime.toFixed(3)}s
+                        </Typography>
+                      )}
+                      {verdict.failedAt > 0 && (
+                        <Typography variant="caption" color="text.secondary">
+                          failed test #{verdict.failedAt}
+                        </Typography>
+                      )}
+                    </Stack>
+                    {verdict.message && (
+                      <Typography variant="caption" sx={{ whiteSpace: 'pre-wrap' }}>
+                        {verdict.message}
+                      </Typography>
+                    )}
+                  </Alert>
+                </Box>
+              )}
+
+              {sampleResults.length > 0 && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    Sample test results
+                  </Typography>
+                  <Stack spacing={1}>
+                    {sampleResults.map((r, i) => (
+                      <Paper
+                        key={i}
+                        variant="outlined"
+                        sx={{
+                          p: 1.5,
+                          backgroundColor: r.result ? '#f1faf2' : '#fdecec',
+                        }}
+                      >
+                        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+                          <Typography variant="body2" fontWeight={600}>
+                            Test {i + 1}
+                          </Typography>
+                          <Chip
+                            label={r.result ? 'Pass' : 'Fail'}
+                            size="small"
+                            color={r.result ? 'success' : 'error'}
+                          />
+                          <Typography variant="caption" color="text.secondary">
+                            {r.runtime}
+                          </Typography>
+                        </Stack>
+                        <Box component="pre" sx={{ m: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                          input:    {r.input}
+                          {'\n'}expected: {r.expected}
+                          {'\n'}got:      {r.output}
+                        </Box>
+                      </Paper>
+                    ))}
+                  </Stack>
+                </Box>
               )}
             </Paper>
-          </main>
-          <footer className="bg-gray-900 text-white px-4 md:px-6 py-3 flex items-center justify-between">
-            <Typography variant="body2">&copy; 2024 TALLY. All rights reserved.</Typography>
-          </footer>
-        </div>
+          </Grid>
+        </Grid>
       </Container>
     </>
   );
