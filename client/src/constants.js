@@ -1,20 +1,62 @@
+// Starter snippets shown in the editor for each language. They demonstrate
+// the stdin-reading pattern used by the judge — copy-paste-ready.
+
 export const LANGUAGE_VERSIONS = {
-  javascript: '18.15.0',
-  typescript: '5.0.3',
-  python: '3.10.0',
-  java: '15.0.2',
-  csharp: '6.12.0',
-  php: '8.2.3',
-  cpp: '20',
+  python: '3.x',
+  javascript: 'Node 20',
+  cpp: 'g++ -std=c++17',
+  java: 'OpenJDK 17',
 };
 
 export const CODE_SNIPPETS = {
-  javascript: `function greet(name) {\n\tconsole.log("Hello, " + name + "!");\n}\n\ngreet("WORLD!!");\n`,
-  typescript: `type Params = {\n\tname: string;\n}\n\nfunction greet(data: Params) {\n\tconsole.log("Hello, " + data.name + "!");\n}\n\ngreet({ name: "WORLD!!" });\n`,
-  python: `def greet(name):\n\tprint("Hello, " + name + "!")\n\ngreet("WORLD!!")\n`,
-  java: `public class HelloWorld {\n\tpublic static void main(String[] args) {\n\t\tSystem.out.println("Hello World");\n\t}\n}\n`,
-  csharp:
-    'using System;\n\nnamespace HelloWorld\n{\n\tclass Hello { \n\t\tstatic void Main(string[] args) {\n\t\t\tConsole.WriteLine("Hello World in C#");\n\t\t}\n\t}\n}\n',
-  php: "<?php\n\n$name = 'WORLD!!';\necho $name;\n",
-  cpp: `#include <iostream>\nusing namespace std;\n\nint main() {\n\tcout << "Hello, WORLD!!" << endl;\n\treturn 0;\n}\n`,
+  python: `# Read whitespace-separated tokens from stdin.
+import sys
+data = sys.stdin.read().split()
+
+# example: print the first token
+if data:
+    print(data[0])
+`,
+
+  javascript: `// Read all of stdin, then split.
+let data = '';
+process.stdin.on('data', d => data += d);
+process.stdin.on('end', () => {
+    const tokens = data.split(/\\s+/).filter(Boolean);
+    // example: print the first token
+    if (tokens.length) console.log(tokens[0]);
+});
+`,
+
+  cpp: `#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+    ios::sync_with_stdio(false);
+    cin.tie(nullptr);
+
+    // example: read one int and print it
+    int x;
+    if (cin >> x) cout << x << "\\n";
+    return 0;
+}
+`,
+
+  // IMPORTANT: the class MUST be named Main. The judge saves your code as
+  // Main.java and runs \`java Main\`.
+  java: `import java.util.*;
+import java.io.*;
+
+public class Main {
+    public static void main(String[] args) throws IOException {
+        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
+        StreamTokenizer st = new StreamTokenizer(br);
+
+        // example: read one int and print it
+        if (st.nextToken() != StreamTokenizer.TT_EOF) {
+            System.out.println((long) st.nval);
+        }
+    }
+}
+`,
 };

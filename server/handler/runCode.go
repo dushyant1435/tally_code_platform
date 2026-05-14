@@ -7,17 +7,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
 	"y/models"
 )
 
-const (
-	executionTimeout = 5 * time.Second
-	pythonBinary     = "python3"
-)
+const executionTimeout = 5 * time.Second
 
 type execResult struct {
 	Stdout   string
@@ -27,24 +23,24 @@ type execResult struct {
 	ExitCode int
 }
 
-// runPython writes code to a fresh temp file and executes it once with the
-// supplied stdin, returning captured stdout/stderr and elapsed time.
-func runPython(ctx context.Context, code, stdin string) (execResult, error) {
-	f, err := os.CreateTemp("", "tally-*.py")
+// runUserCode prepares a workspace for the given language, optionally compiles,
+// and executes the program with the supplied stdin.
+// The returned execResult is empty if compile failed; compileLog explains why.
+func runUserCode(ctx context.Context, language, code, stdin string) (
+	res execResult, compileLog string, compileFail bool, err error,
+) {
+	p, err := prepareExecution(ctx, language, code)
 	if err != nil {
-		return execResult{}, fmt.Errorf("create temp file: %w", err)
+		return execResult{}, "", false, err
 	}
-	defer os.Remove(f.Name())
+	defer p.Cleanup()
 
-	if _, err := f.WriteString(code); err != nil {
-		f.Close()
-		return execResult{}, fmt.Errorf("write temp file: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return execResult{}, fmt.Errorf("close temp file: %w", err)
+	if p.CompileFail {
+		return execResult{}, p.CompileLog, true, nil
 	}
 
-	cmd := exec.CommandContext(ctx, pythonBinary, f.Name())
+	cmd := exec.CommandContext(ctx, p.RunArgs[0], p.RunArgs[1:]...)
+	cmd.Dir = p.Dir
 	cmd.Stdin = strings.NewReader(stdin)
 
 	var stdout, stderr strings.Builder
@@ -52,32 +48,31 @@ func runPython(ctx context.Context, code, stdin string) (execResult, error) {
 	cmd.Stderr = &stderr
 
 	start := time.Now()
-	err = cmd.Run()
+	runErr := cmd.Run()
 	elapsed := time.Since(start).Seconds()
 
-	res := execResult{
+	res = execResult{
 		Stdout:  stdout.String(),
 		Stderr:  stderr.String(),
 		Runtime: elapsed,
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res.TimedOut = true
-		return res, nil
+		return res, "", false, nil
 	}
-	if err != nil {
+	if runErr != nil {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if errors.As(runErr, &exitErr) {
 			res.ExitCode = exitErr.ExitCode()
-			return res, nil
+			return res, "", false, nil
 		}
-		return res, err
+		return res, "", false, runErr
 	}
-	return res, nil
+	return res, "", false, nil
 }
 
 // RunCode executes the submitted code against every test case for a problem.
-// Records a submissions row with the resulting verdict and returns it.
-// Requires authentication.
+// Records a submissions row with the resulting verdict.
 func RunCode(w http.ResponseWriter, r *http.Request) {
 	c := ClaimsFromContext(r.Context())
 	if c == nil {
@@ -90,9 +85,8 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Language == "" {
-		req.Language = "python"
-	}
+	language, _ := Language(req.Language)
+	req.Language = language
 
 	db := DB()
 	rows, err := db.Query(`SELECT input, output FROM testcases WHERE id=$1`, req.ID)
@@ -104,11 +98,11 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var (
-		status         = models.StatusAccepted
-		message        string
-		failedAt       int
-		totalRuntime   float64
-		rowCount       int
+		status       = models.StatusAccepted
+		message      string
+		failedAt     int
+		totalRuntime float64
+		rowCount     int
 	)
 
 	for rows.Next() {
@@ -121,8 +115,13 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 		}
 
 		ctx, cancel := context.WithTimeout(r.Context(), executionTimeout)
-		res, runErr := runPython(ctx, req.Code, input)
+		res, compileLog, compileFail, runErr := runUserCode(ctx, language, req.Code, input)
 		cancel()
+
+		if compileFail {
+			status, message, failedAt = models.StatusCompileError, truncate(compileLog, 400), 0
+			break
+		}
 
 		if res.Runtime > totalRuntime {
 			totalRuntime = res.Runtime
@@ -135,16 +134,12 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 			status, message, failedAt = models.StatusTimeLimitExceeded,
 				fmt.Sprintf("exceeded %s on test %d", executionTimeout, rowCount), rowCount
 		case res.ExitCode != 0:
-			snippet := strings.TrimSpace(res.Stderr)
-			if len(snippet) > 200 {
-				snippet = snippet[:200] + "..."
-			}
-			status, message, failedAt = models.StatusRuntimeError, snippet, rowCount
+			status, message, failedAt = models.StatusRuntimeError, truncate(res.Stderr, 400), rowCount
 		case strings.TrimSpace(res.Stdout) != strings.TrimSpace(expected):
 			status, message, failedAt = models.StatusWrongAnswer,
 				fmt.Sprintf("expected %q, got %q",
-					strings.TrimSpace(expected),
-					strings.TrimSpace(res.Stdout)), rowCount
+					truncate(strings.TrimSpace(expected), 120),
+					truncate(strings.TrimSpace(res.Stdout), 120)), rowCount
 		default:
 			continue
 		}
@@ -159,7 +154,7 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 		status, message = models.StatusNoTestCases, "this problem has no test cases yet"
 	}
 
-	subID, err := recordSubmission(req.ID, c.UserID, req.Language, req.Code, status,
+	subID, err := recordSubmission(req.ID, c.UserID, language, req.Code, status,
 		totalRuntime, failedAt, message)
 	if err != nil {
 		log.Printf("RunCode record submission: %v", err)
@@ -172,39 +167,48 @@ func RunCode(w http.ResponseWriter, r *http.Request) {
 		"totalRuntime":  totalRuntime,
 		"failedAt":      failedAt,
 		"message":       message,
+		"language":      language,
 	})
 }
 
 // CustomRunCode runs the code once with the user-provided stdin and returns
-// the captured output (Playground endpoint). Does not require auth.
+// the captured output (Playground endpoint).
 func CustomRunCode(w http.ResponseWriter, r *http.Request) {
 	var req models.CustomCodeData
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	language, _ := Language(req.Language)
 
 	ctx, cancel := context.WithTimeout(r.Context(), executionTimeout)
 	defer cancel()
 
-	res, err := runPython(ctx, req.Code, req.Input)
+	res, compileLog, compileFail, err := runUserCode(ctx, language, req.Code, req.Input)
 	if err != nil {
 		log.Printf("CustomRunCode exec: %v", err)
 		httpError(w, http.StatusInternalServerError, "failed to execute code")
 		return
 	}
 
-	output := strings.TrimRight(res.Stdout, "\n")
+	var output string
 	switch {
+	case compileFail:
+		output = "[compilation error]\n" + compileLog
 	case res.TimedOut:
-		output = strings.TrimSpace(output + "\n[time limit exceeded after " +
-			fmt.Sprintf("%.1fs", executionTimeout.Seconds()) + "]")
+		output = strings.TrimRight(res.Stdout, "\n") +
+			"\n[time limit exceeded after " +
+			fmt.Sprintf("%.1fs", executionTimeout.Seconds()) + "]"
 	case res.Stderr != "":
-		output = strings.TrimSpace(output + "\n" + res.Stderr)
+		output = strings.TrimRight(res.Stdout, "\n") + "\n" + strings.TrimSpace(res.Stderr)
+	default:
+		output = strings.TrimRight(res.Stdout, "\n")
 	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"output":  output,
-		"runtime": res.Runtime,
+		"output":   strings.TrimSpace(output),
+		"runtime":  res.Runtime,
+		"language": language,
 	})
 }
 
@@ -216,6 +220,7 @@ func RunSampleCode(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	language, _ := Language(req.Language)
 
 	rows, err := DB().Query(
 		`SELECT input, output FROM testcases WHERE id=$1 AND sample=true`, req.ID)
@@ -229,6 +234,8 @@ func RunSampleCode(w http.ResponseWriter, r *http.Request) {
 	results := make([]map[string]interface{}, 0)
 	allPassed := true
 	rowCount := 0
+	var compileFailOnce bool
+	var compileLogOnce string
 
 	for rows.Next() {
 		rowCount++
@@ -239,13 +246,31 @@ func RunSampleCode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// If we already saw a compile error on the first test, surface it
+		// without re-running. (Compile failures are file-level, not per-input.)
+		if compileFailOnce {
+			results = append(results, map[string]interface{}{
+				"input":    input,
+				"expected": expected,
+				"output":   "compilation error: " + compileLogOnce,
+				"result":   false,
+				"runtime":  "-",
+			})
+			allPassed = false
+			continue
+		}
+
 		ctx, cancel := context.WithTimeout(r.Context(), executionTimeout)
-		res, runErr := runPython(ctx, req.Code, input)
+		res, compileLog, compileFail, runErr := runUserCode(ctx, language, req.Code, input)
 		cancel()
 
 		actual := strings.TrimRight(res.Stdout, "\n")
 		passed := false
 		switch {
+		case compileFail:
+			compileFailOnce = true
+			compileLogOnce = truncate(compileLog, 300)
+			actual = "compilation error: " + compileLogOnce
 		case runErr != nil:
 			actual = "execution error: " + runErr.Error()
 		case res.TimedOut:
@@ -277,7 +302,16 @@ func RunSampleCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"success": allPassed,
-		"results": results,
+		"success":  allPassed,
+		"results":  results,
+		"language": language,
 	})
+}
+
+func truncate(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

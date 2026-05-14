@@ -91,6 +91,7 @@ const (
 	StatusWrongAnswer       SubmissionStatus = "wrong_answer"
 	StatusTimeLimitExceeded SubmissionStatus = "time_limit_exceeded"
 	StatusRuntimeError      SubmissionStatus = "runtime_error"
+	StatusCompileError      SubmissionStatus = "compilation_error"
 	StatusNoTestCases       SubmissionStatus = "no_test_cases"
 	StatusServerError       SubmissionStatus = "server_error"
 )

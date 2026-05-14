@@ -31,6 +31,7 @@ const statusMeta = {
   wrong_answer:        { label: 'Wrong Answer',         bg: '#FCE8E8', fg: '#B0233A' },
   time_limit_exceeded: { label: 'Time Limit Exceeded',  bg: '#FFF3DD', fg: '#A0660A' },
   runtime_error:       { label: 'Runtime Error',        bg: '#FCE8E8', fg: '#B0233A' },
+  compilation_error:   { label: 'Compilation Error',    bg: '#FFF3DD', fg: '#A0660A' },
   no_test_cases:       { label: 'No Test Cases',        bg: '#eee',    fg: '#555'    },
   server_error:        { label: 'Server Error',         bg: '#FCE8E8', fg: '#B0233A' },
 };

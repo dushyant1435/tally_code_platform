@@ -12,7 +12,6 @@ import {
 } from '@mui/material';
 import SportsTennisIcon from '@mui/icons-material/SportsTennis';
 import ListAltOutlinedIcon from '@mui/icons-material/ListAltOutlined';
-import SportsKabaddiIcon from '@mui/icons-material/SportsKabaddi';
 import { Link, useNavigate } from 'react-router-dom';
 import NavBar from '../components/NavBar';
 import { useAuth } from '../auth/AuthContext';
@@ -22,20 +21,13 @@ const cards = [
     to: '/playground',
     icon: <SportsTennisIcon sx={{ fontSize: 96, color: '#58A399' }} />,
     title: 'Playground',
-    desc: 'Open editor with your own input. Run Python freely.',
+    desc: 'Open editor with your own input. Run Python, JavaScript, C++ or Java.',
   },
   {
     to: '/problem',
     icon: <ListAltOutlinedIcon sx={{ fontSize: 96, color: '#58A399' }} />,
     title: 'Coding arena',
     desc: 'Solve curated problems with real verdicts.',
-  },
-  {
-    to: '/code-battle',
-    icon: <SportsKabaddiIcon sx={{ fontSize: 96, color: '#888' }} />,
-    title: 'Code battle',
-    desc: 'Compete head-to-head — coming soon.',
-    disabled: true,
   },
 ];
 
@@ -90,18 +82,16 @@ const Home = () => {
         )}
         <Grid container spacing={3}>
           {cards.map((c) => (
-            <Grid item xs={12} md={4} key={c.to}>
+            <Grid item xs={12} md={6} key={c.to}>
               <Card
                 sx={{
                   height: '100%',
-                  opacity: c.disabled ? 0.55 : 1,
                   transition: 'transform 0.2s ease',
-                  '&:hover': { transform: c.disabled ? 'none' : 'translateY(-4px)' },
+                  '&:hover': { transform: 'translateY(-4px)' },
                 }}
               >
                 <CardActionArea
-                  disabled={c.disabled}
-                  onClick={() => !c.disabled && navigate(c.to)}
+                  onClick={() => navigate(c.to)}
                   sx={{ p: 3, height: '100%' }}
                 >
                   <Box sx={{ textAlign: 'center' }}>{c.icon}</Box>
